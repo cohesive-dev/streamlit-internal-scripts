@@ -23,31 +23,31 @@ def remove_multiple_leads_from_campaign(
 
 
 def update_smartlead_campaign_follow_up_percentage(
-    *, campaign_id: int, follow_up_percentage: int
-) -> int:
-    """
-    Python equivalent of:
-      updateSmartleadCampaignFollowUpPercentage({ campaignId, followUpPercentage })
+    *,
+    campaign_id: int,
+    follow_up_percentage: float,
+) -> Dict[str, Any]:
+    variables = {
+        "id": campaign_id,
+        "changes": {"follow_up_percentage": follow_up_percentage},
+    }
 
-    Returns the updated campaign ID on success.
-    """
     query = """
     mutation updateCampaignById($id: Int!, $changes: email_campaigns_set_input!) {
       update_email_campaigns_by_pk(pk_columns: {id: $id}, _set: $changes) {
         id
         __typename
       }
-    }"""
-
-    variables = {
-        "id": int(campaign_id),
-        "changes": {"follow_up_percentage": int(follow_up_percentage)},
     }
+    """
 
-    query_smartlead_internal_graphql_endpoint(
-        query=query,
-        variables=variables,
-        operation_name="updateCampaignById",
+    return query_smartlead_internal_graphql_endpoint(
+        method="POST",
+        body={
+            "query": query,
+            "variables": variables,
+            "operationName": "updateCampaignById",
+        },
     )
 
 
@@ -109,13 +109,6 @@ def query_smartlead_internal_graphql_endpoint(
     query_params: Optional[Dict[str, Any]] = None,
     timeout: int = 30,
 ) -> Dict[str, Any]:
-    """
-    Python equivalent of querySmartleadInternalGraphQLEndpoint.
-    - Sends request to Smartlead internal GraphQL endpoint with Bearer token
-    - Accepts custom headers/body/query params
-    - Raises SmartleadGraphQLError with a helpful message on failure
-    - Returns response JSON (dict)
-    """
     INTERNAL_SMARTLEAD_GRAPHQL_API = "https://fe-gql.smartlead.ai/v1/graphql"
     token = os.getenv("SMARTLEAD_INTERNAL_API_TOKEN")
     if not token:
