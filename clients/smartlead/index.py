@@ -1,4 +1,4 @@
-from ast import List
+from typing import List
 import logging
 import requests
 import streamlit as st
