@@ -27,6 +27,10 @@ nav = st.navigation(
             "pages/va/enable_auto_forward.py",
             title="Enable/Disable Auto Forward",
         ),
+        st.Page(
+            "pages/va/deduplicate_linear_tickets.py",
+            title="Deduplicate Linear Tickets",
+        ),
     ]
 )
 nav.run()
