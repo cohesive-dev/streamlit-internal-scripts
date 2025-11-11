@@ -13,7 +13,6 @@ def send_email(to_address):
             "html": "<strong>it works!</strong>",
         }
         email = resend.Emails.send(params)
-        print(email)
     except Exception as ex:
         st.error(f"Error sending email: {ex}")
         return None

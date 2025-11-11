@@ -3,7 +3,6 @@ import numpy as np
 from openai import OpenAI
 
 # Streamlit page config
-st.set_page_config(page_title="Cosine Similarity Tester", layout="centered")
 st.title("Cosine Similarity of Two Terms (OpenAI Embeddings)")
 
 # Get API key from Streamlit secrets

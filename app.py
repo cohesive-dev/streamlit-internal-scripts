@@ -23,6 +23,10 @@ nav = st.navigation(
             "pages/va/test_cosine.py",
             title="Test Cosine Similarity",
         ),
+        st.Page(
+            "pages/va/enable_auto_forward.py",
+            title="Enable/Disable Auto Forward",
+        ),
     ]
 )
 nav.run()
