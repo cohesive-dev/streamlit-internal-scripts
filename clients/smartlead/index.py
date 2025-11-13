@@ -54,6 +54,18 @@ def query_smartlead(
         raise Exception(f"Email Server Error with {endpoint} - {str(e)}") from e
 
 
+def get_campaign_top_level_analytics_for_date_range(
+    campaign_id: str, start_date: str, end_date: str
+) -> Any:
+    """Get campaign top-level analytics for a specific date range."""
+    response = query_smartlead(
+        endpoint=f"campaigns/{campaign_id}/top-level-analytics-by-date",
+        method="GET",
+        query_params={"start_date": start_date, "end_date": end_date},
+    )
+    return response
+
+
 def get_campaign_by_id(campaign_id: int) -> SmartleadCampaign:
     result: Any = query_smartlead(endpoint=f"campaigns/{campaign_id}", method="GET")
 

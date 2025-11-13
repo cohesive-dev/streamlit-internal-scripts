@@ -31,6 +31,14 @@ nav = st.navigation(
             "pages/va/deduplicate_linear_tickets.py",
             title="Deduplicate Linear Tickets",
         ),
+        st.Page(
+            "pages/va/assign_linear_tickets.py",
+            title="Assign Linear Tickets",
+        ),
+        st.Page(
+            "pages/va/get_low_lead_orgs.py",
+            title="Get Low Lead Organizations",
+        ),
     ]
 )
 nav.run()
