@@ -39,6 +39,10 @@ nav = st.navigation(
             "pages/va/get_low_lead_orgs.py",
             title="Get Low Lead Organizations",
         ),
+        st.Page(
+            "pages/va/setup_organization_twilio.py",
+            title="Set Up Organization Twilio",
+        ),
     ]
 )
 nav.run()
