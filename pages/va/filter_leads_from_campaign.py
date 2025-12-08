@@ -191,8 +191,8 @@ for _, row in org_campaigns.iterrows():
     try:
         campaign_detail = get_campaign_by_id(int(row["campaignId"]))
         campaign_details.append(campaign_detail)
-    except ValueError as e:
-        st.error(f"Error fetching campaign {row['campaignId']}: {e}")
+    except Exception as e:
+        continue
 
 campaign_options = {c.id: c.name for c in campaign_details}
 campaign_ids = list(campaign_options.keys())

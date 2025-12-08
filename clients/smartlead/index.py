@@ -68,11 +68,10 @@ def get_campaign_top_level_analytics_for_date_range(
 
 def get_campaign_by_id(campaign_id: int) -> SmartleadCampaign:
     result: Any = query_smartlead(endpoint=f"campaigns/{campaign_id}", method="GET")
-
     try:
         campaign = SmartleadCampaign.model_validate(result)
         return campaign
-    except ValidationError as e:
+    except Exception as e:
         raise ValueError(
             f"Invalid campaign data from Smartlead API for ID {campaign_id}: {e}"
         ) from e

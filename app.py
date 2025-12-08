@@ -47,6 +47,10 @@ nav = st.navigation(
             "pages/va/ingest_cohesive_accounts.py",
             title="Ingest Cohesive Accounts",
         ),
+        st.Page(
+            "pages/va/set_whitelabel_config.py",
+            title="Set Whitelabel Configuration",
+        ),
     ]
 )
 nav.run()
