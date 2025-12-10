@@ -9,7 +9,7 @@ SELECT *
   FROM platform_organizations
   where paused = false
 """
-    campaigns = conn.query(query)
+    campaigns = conn.query(query, ttl=0)
     return list(campaigns.to_dict(orient="records"))
 
 

@@ -28,7 +28,7 @@ def ingest_cohesive_account_from_smartlead():
 
     conn = st.connection("postgresql", type="sql")
 
-    organizations = conn.query("SELECT id, name FROM platform_organizations")
+    organizations = conn.query("SELECT id, name FROM platform_organizations", ttl=0)
 
     org_options = {row["name"]: row["id"] for _, row in organizations.iterrows()}
 
@@ -97,6 +97,7 @@ def ingest_cohesive_account_from_smartlead():
       ON CONFLICT DO NOTHING;
       """,
             params=account,
+            ttl=0,
         )
         success_count += 1
 

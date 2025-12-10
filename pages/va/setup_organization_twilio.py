@@ -6,7 +6,7 @@ from clients.twilio.index import get_or_create_twilio_client
 def setup_organization_twilio():
     st.title("Set Up Organization Twilio")
     conn = st.connection("postgresql", type="sql")
-    organizations = conn.query("SELECT * FROM platform_organizations").to_dict(
+    organizations = conn.query("SELECT * FROM platform_organizations", ttl=0).to_dict(
         orient="records"
     )
     org_options = {o["name"]: o["id"] for o in organizations}

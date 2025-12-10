@@ -137,7 +137,7 @@ SELECT
 FROM smart_lead_campaigns slc
 LEFT JOIN platform_organizations po ON slc."platformOrganizationId" = po.id
 """
-    campaigns = conn.query(query)
+    campaigns = conn.query(query, ttl=0)
     active_cohesive_campaign_ids = [
         c["campaignId"]
         for c in campaigns

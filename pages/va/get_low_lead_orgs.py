@@ -32,7 +32,7 @@ SELECT
 FROM smart_lead_campaigns slc
 LEFT JOIN platform_organizations po ON slc."platformOrganizationId" = po.id
 """
-    campaigns = conn.query(query)
+    campaigns = conn.query(query, ttl=0)
     campaigns = list(campaigns.to_dict(orient="records"))
 
     seven_days_ago = datetime.datetime.now() - datetime.timedelta(days=7)
