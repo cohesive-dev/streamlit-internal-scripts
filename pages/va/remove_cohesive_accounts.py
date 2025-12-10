@@ -5,7 +5,7 @@ def remove_cohesive_accounts():
     st.title("Remove Cohesive Accounts")
     conn = st.connection("postgresql", type="sql")
     organizations = conn.query(
-        "SELECT id, name FROM platform_organizations ORDER BY name;"
+        "SELECT id, name FROM platform_organizations ORDER BY name;", ttl=0
     )
     if len(organizations) == 0:
         st.write("No organizations found.")

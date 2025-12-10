@@ -167,8 +167,6 @@ LEFT JOIN platform_organizations po ON slc."platformOrganizationId" = po.id
 """
 campaigns = conn.query(query, ttl=0)
 
-print([campaign["name"] for campaign in campaigns])
-
 # Filter active orgs
 active_orgs = campaigns[campaigns["organizationPaused"] == False]
 unique_orgs = active_orgs.drop_duplicates(subset=["organizationId"])

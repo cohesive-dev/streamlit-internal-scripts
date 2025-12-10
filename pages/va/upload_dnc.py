@@ -34,7 +34,7 @@ def require_single_domain_column(df: pd.DataFrame) -> pd.Series:
 
 conn = st.connection("postgresql", type="sql")
 orgs = conn.query(
-    'SELECT id, name, "dncListUrl" FROM platform_organizations ORDER BY name;'
+    'SELECT id, name, "dncListUrl" FROM platform_organizations ORDER BY name;', ttl=0
 )
 if orgs.empty:
     st.info("No organizations found.")
