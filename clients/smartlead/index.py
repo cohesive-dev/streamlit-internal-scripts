@@ -4,6 +4,7 @@ import requests
 import streamlit as st
 from typing import Optional, Dict, Any
 from pydantic import ValidationError
+import time
 from clients.smartlead.schema import (
     SmartleadCampaign,
     SmartleadCampaignLead,
@@ -121,6 +122,8 @@ def get_leads_by_campaign_id_with_pagination(
             page = SmartleadGetCampaignLeadsResponse.model_validate(response)
 
             leads.extend(page.data)
+
+            time.sleep(1)
         except Exception as e:
             logging.error(
                 f"Error getting leads for campaign {campaign_id} at offset {len(leads)}: {e}"

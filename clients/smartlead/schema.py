@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from datetime import datetime
 from enum import Enum
@@ -49,7 +49,7 @@ class SmartleadLead(BaseModel):
     company_name: Optional[str] = None
     website: Optional[str] = None
     location: Optional[str] = None
-    custom_fields: Optional[Dict[str, str]] = None
+    custom_fields: Optional[Dict[str, Any]] = None
     linkedin_profile: Optional[str] = None
     company_url: Optional[str] = None
     is_unsubscribed: Optional[bool] = None
