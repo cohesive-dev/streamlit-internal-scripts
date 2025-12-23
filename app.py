@@ -51,6 +51,10 @@ nav = st.navigation(
             "pages/va/set_whitelabel_config.py",
             title="Set Whitelabel Configuration",
         ),
+        st.Page(
+            "pages/va/link_campaigns.py",
+            title="Link Campaigns to Organization",
+        ),
     ]
 )
 nav.run()
