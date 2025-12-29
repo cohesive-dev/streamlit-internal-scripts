@@ -55,6 +55,10 @@ nav = st.navigation(
             "pages/va/link_campaigns.py",
             title="Link Campaigns to Organization",
         ),
+        st.Page(
+            "pages/va/edit_campaign_messages.py",
+            title="Edit Campaign Messages",
+        ),
     ]
 )
 nav.run()
