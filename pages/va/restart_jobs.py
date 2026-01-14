@@ -42,17 +42,17 @@ placeholders = ", ".join(["%s"] * len(names))
 
 query = """
 SELECT
-    id,
-    name,
-    status,
-    "createdAt",
-    "updatedAt",
-    "platformOrganizationId",
-    type,
-    "apolloRecordCount",
-    "linearTicketUrl"
+  id,
+  name,
+  status,
+  "createdAt",
+  "updatedAt",
+  "platformOrganizationId",
+  type,
+  "apolloRecordCount",
+  "linearTicketUrl"
 FROM lead_generation_jobs
-WHERE status = 'running'
+WHERE status IN ('running', 'failed')
   AND name = ANY(:names)
 ORDER BY "updatedAt" DESC
 """
