@@ -3,14 +3,17 @@ import time
 import streamlit as st
 from datetime import datetime
 
-from clients.linear.index import get_pending_linear_tickets, remove_linear_ticket
+from clients.linear.index import (
+    get_unstarted_linear_tickets,
+    remove_linear_ticket,
+)
 
 
 def deduplicate_linear_tickets():
     st.title("Deduplicate Linear Tickets")
 
     st.write("Fetching pending Linear tickets...")
-    issues = get_pending_linear_tickets()
+    issues = get_unstarted_linear_tickets()
     st.write(f"Found **{len(issues)}** issues to deduplicate.")
 
     title_map = {}  # { core_title: [issues] }

@@ -96,6 +96,66 @@ def update_smartlead_campaign_follow_up_percentage(
     )
 
 
+def get_campaign_analytics_by_id(
+    *,
+    campaign_id: int,
+    start_date: str,
+    end_date: str,
+    timezone: str = "America/New_York",
+) -> list[Dict[str, Any]]:
+    """
+    Get campaign analytics for a specific date range using GraphQL.
+
+    Args:
+        campaign_id: The Smartlead campaign ID
+        start_date: Start date in format "YYYY/MM/DD"
+        end_date: End date in format "YYYY/MM/DD"
+        timezone: Timezone string (default: "America/New_York")
+
+    Returns:
+        List of daily analytics with sent_count, bounce_count, open_count,
+        click_count, reply_count, skipped_count
+    """
+    query = """
+    query getCampaignAnalyticsById($args: grouped_email_analytics_timezone_args!) {
+      grouped_email_analytics_timezone(args: $args) {
+        date
+        sent_count
+        bounce_count
+        open_count
+        click_count
+        reply_count
+        skipped_count
+        __typename
+      }
+    }
+    """
+
+    variables = {
+        "args": {
+            "campaign_id": campaign_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "timezone": timezone,
+        }
+    }
+
+    result = query_smartlead_internal_graphql_endpoint(
+        method="POST",
+        body={
+            "operationName": "getCampaignAnalyticsById",
+            "variables": variables,
+            "query": query,
+        },
+    )
+
+    # Extract the analytics data from the response
+    if "data" in result and "grouped_email_analytics_timezone" in result["data"]:
+        return result["data"]["grouped_email_analytics_timezone"]
+
+    return []
+
+
 def query_smartlead_internal_rest_endpoint(
     endpoint: str,
     method: str,
