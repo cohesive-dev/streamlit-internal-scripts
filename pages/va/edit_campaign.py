@@ -234,8 +234,9 @@ if st.button("Load Campaign", type="primary"):
 
             # Load sequences
             sequences = get_campaign_sequences(campaign_id)
+            sequences = sequences[:2]
             if sequences:
-                st.session_state.sequences = sequences[:2]
+                st.session_state.sequences = sequences
 
                 # Check if file exists in repo
                 file_exists, existing_data, file_sha = check_campaign_file_exists(
