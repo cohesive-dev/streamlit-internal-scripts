@@ -18,6 +18,7 @@ def query_cohesive(
     headers: Optional[Dict[str, Any]] = None,
     body: Optional[Dict[str, Any]] = None,
     query_params: Optional[Dict[str, Any]] = None,
+    timeout: int = 30,
 ) -> Any:
     """
     Python equivalent of queryCohesive (axios wrapper)
@@ -30,7 +31,7 @@ def query_cohesive(
         headers=headers,
         json=body,  # axios `data` → requests `json`
         params=query_params,  # axios `params`
-        timeout=30,
+        timeout=timeout,
     )
 
     response.raise_for_status()
@@ -45,10 +46,14 @@ def auto_schedule_restart_lead_generation_jobs(
     """
     url = f"{BASE_LEAD_GENERATION_SERVICE_URL}auto-schedule-restart"
 
+    # Increase timeout to 120 seconds to avoid timeout errors
     return query_cohesive(
         method="POST",
         url=url,
         body={"leadGenerationJobIds": lead_generation_job_ids},
+        query_params=None,
+        headers=None,
+        timeout=120,
     )
 
 

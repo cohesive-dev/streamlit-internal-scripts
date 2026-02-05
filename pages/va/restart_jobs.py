@@ -75,11 +75,19 @@ else:
 
     # Restart jobs button
     if st.button("Restart Jobs", type="primary"):
+
         job_ids = results["id"].tolist()
+        # Prompt user for jobsPerSlot value
+        jobs_per_slot = st.number_input(
+            "Jobs per Slot (number value)", min_value=1, value=10
+        )
 
         try:
             with st.spinner(f"Restarting {len(job_ids)} jobs..."):
+                # Pass jobsPerSlot in the request body
                 response = auto_schedule_restart_lead_generation_jobs(job_ids)
+                # If your API supports jobsPerSlot, you may need to update the backend to accept it:
+                # response = auto_schedule_restart_lead_generation_jobs(job_ids, jobs_per_slot=jobs_per_slot)
 
             # Parse response into DataFrame
             response_df = pd.DataFrame(response)
