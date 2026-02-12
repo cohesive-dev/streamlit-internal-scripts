@@ -71,6 +71,10 @@ nav = st.navigation(
             "pages/va/revert_campaign_template.py",
             title="Revert Campaign Template",
         ),
+        st.Page(
+            "pages/va/setup_organization_phone.py",
+            title="Set Up Organization Phone",
+        ),
     ]
 )
 nav.run()
