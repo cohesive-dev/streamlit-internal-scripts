@@ -55,6 +55,24 @@ def query_smartlead(
         raise Exception(f"Email Server Error with {endpoint} - {str(e)}") from e
 
 
+def query_smartlead_graphql(
+    query: str, variables: Dict[str, Any], operation_name: str
+) -> Dict[str, Any]:
+    url = "https://server.smartlead.ai/graphql"  # Assuming GraphQL endpoint
+    headers = {
+        "Authorization": f"Bearer {st.secrets['SMARTLEAD_API_KEY']}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(
+        url,
+        json={"query": query, "variables": variables, "operationName": operation_name},
+        headers=headers,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def get_campaign_top_level_analytics_for_date_range(
     campaign_id: str, start_date: str, end_date: str
 ) -> Any:

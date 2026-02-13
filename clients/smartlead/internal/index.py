@@ -1,8 +1,11 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import requests
 
-from ..schema import SmartleadGetCampaignSequencesViaGraphQLResponse
+from ..schema import (
+    SmartleadCampaignLeadMapping,
+    SmartleadGetCampaignSequencesViaGraphQLResponse,
+)
 
 
 def get_campaign_sequences(
@@ -154,6 +157,82 @@ def get_campaign_analytics_by_id(
         return result["data"]["grouped_email_analytics_timezone"]
 
     return []
+
+
+def get_campaign_leads_by_id_with_mapping(
+    campaign_id: int, lead_category: Optional[int] = None
+) -> List[SmartleadCampaignLeadMapping]:
+    variables = {
+        "offset": 0,
+        "limit": 10000,
+        "where": {
+            "email_campaign_id": {"_eq": campaign_id},
+            "user_id": {"_eq": 21050},
+        },
+        "campaignId": campaign_id,
+    }
+    if lead_category is not None:
+        variables["where"]["lead_category_id"] = {"_eq": lead_category}
+
+    query = """
+    query getCampaignLeadsByIdWithMapping($offset: Int!, $limit: Int!, $where: email_campaign_leads_mappings_bool_exp!, $campaignId: Int!) {
+      email_campaign_leads_mappings(
+        where: $where
+        offset: $offset
+        limit: $limit
+        order_by: {created_at: asc, id: asc}
+      ) {
+        id
+        status
+        current_seq_num
+        email_campaign_seq_id
+        last_sent_time
+        next_timestamp_to_reach
+        email_lead {
+          ...EmailLeadsFragment
+        }
+        linkedin_cookie {
+          token_name
+        }
+        email_account {
+          username
+          mappingExists: email_campaign_account_mappings(
+            where: {email_campaign_id: {_eq: $campaignId}}
+            limit: 1
+          ) {
+            id
+          }
+        }
+      }
+    }
+
+    fragment EmailLeadsFragment on email_leads {
+      id
+      email
+      last_name
+      first_name
+      phone_number
+      company_name
+      website
+      company_url
+      location
+      custom_fields
+      linkedin_profile
+      esp_domain_type
+      seg_type
+    }
+    """
+
+    response = query_smartlead_internal_graphql_endpoint(
+        method="POST",
+        body={
+            "query": query,
+            "variables": variables,
+            "operationName": "getCampaignLeadsByIdWithMapping",
+        },
+    )
+    mappings = response["data"]["email_campaign_leads_mappings"]
+    return [SmartleadCampaignLeadMapping.model_validate(m) for m in mappings]
 
 
 def query_smartlead_internal_rest_endpoint(

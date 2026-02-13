@@ -8,10 +8,13 @@ import streamlit as st
 from azure.storage.blob import ContentSettings
 
 from clients.azure_blob_storage.index import get_or_create_blob_service_client
-from clients.cohesive.index import get_campaign_leads_by_id_with_mapping
 from clients.smartlead.index import get_campaign_by_id
-from clients.smartlead.internal.index import remove_multiple_leads_from_campaign
+from clients.smartlead.internal.index import (
+    get_campaign_leads_by_id_with_mapping,
+    remove_multiple_leads_from_campaign,
+)
 from common.utils import chunk_list, csv_to_json, get_gpt_answer
+import re
 
 # ========================== Helpers ==========================
 
@@ -41,19 +44,32 @@ def upload_filtered_leads_to_blob(
     return blob_client.url
 
 
-async def is_outside_whitelisted_area(location: str, whitelisted_areas: str) -> bool:
+async def is_outside_whitelisted_area(
+    location: str, whitelisted_areas: str, exact_zip_match: bool
+) -> bool:
     if not location or not whitelisted_areas:
         return False
-    system = (
-        "You are a helpful assistant that filters addresses based on whitelisted areas. "
-        "The whitelisted areas are:\n" + whitelisted_areas.replace(";", "\n")
-    )
-    prompt = (
-        f"Is the address {location} located within any of the whitelisted areas? "
-        f"You answer should strictly be 'yes' or 'no'"
-    )
-    ans = await asyncio.to_thread(get_gpt_answer, system, prompt)
-    return (ans or "").strip().lower() == "no"
+    if exact_zip_match:
+        zip_match = re.search(r"\b\d{5}(?:-\d{4})?\b", location[::-1])
+        if zip_match:
+            zip_code = zip_match.group()[::-1]
+            whitelisted_zips = [
+                z.strip() for z in whitelisted_areas.split(";") if z.strip()
+            ]
+            return zip_code not in whitelisted_zips
+        else:
+            return True  # No zip found, consider outside
+    else:
+        system = (
+            "You are a helpful assistant that filters addresses based on whitelisted areas. "
+            "The whitelisted areas are:\n" + whitelisted_areas.replace(";", "\n")
+        )
+        prompt = (
+            f"Is the address {location} located within any of the whitelisted areas? "
+            f"Answer strictly 'yes' or 'no'"
+        )
+        ans = await asyncio.to_thread(get_gpt_answer, system, prompt)
+        return (ans or "").strip().lower() == "no"
 
 
 async def is_in_blocklisted_industry(
@@ -96,6 +112,7 @@ async def process_leads(
     blocklisted_industries: str,
     whitelisted_industries: str,
     whitelisted_areas: str,
+    exact_zip_match: bool,
 ) -> list[dict]:
     """Return the subset of leads to remove, based on location/industry rules."""
     leads_to_remove: list[dict] = []
@@ -111,7 +128,9 @@ async def process_leads(
         async def check_one(lead: dict):
             loc = lead.get("Location")
             industry = lead.get("informalIndustry")
-            if await is_outside_whitelisted_area(loc, whitelisted_areas):
+            if await is_outside_whitelisted_area(
+                loc, whitelisted_areas, exact_zip_match
+            ):
                 return lead
             if await is_in_blocklisted_industry(industry, blocklisted_industries):
                 return lead
@@ -216,13 +235,49 @@ selected_campaign = next(
 )
 ss.selected_campaign_name = campaign_options.get(ss.selected_campaign_id, "")
 
-uploaded_file = st.file_uploader(
-    "Upload the lead CSV file", type="csv", key="lead_file"
+# Choose data source
+data_source = st.radio(
+    "Choose how to get leads to filter",
+    options=["Upload CSV", "Download via API"],
+    index=0,
+    key="data_source",
 )
-if uploaded_file is None:
-    st.stop()
 
-raw_leads = csv_to_json(uploaded_file.read())
+if data_source == "Upload CSV":
+    uploaded_file = st.file_uploader(
+        "Upload the lead CSV file", type="csv", key="lead_file"
+    )
+    if uploaded_file is None:
+        st.stop()
+    raw_leads = csv_to_json(uploaded_file.read())
+else:  # Download via API
+    if st.button("Download leads from API", key="download_api_btn"):
+        with st.spinner("Downloading leads from API..."):
+            ss.leads = get_campaign_leads_by_id_with_mapping(
+                campaign_id=int(ss.selected_campaign_id)
+            )
+            # Convert to dict format similar to CSV
+            raw_leads = []
+            for lead in ss.leads:
+                email_lead = lead.email_lead
+                raw_leads.append(
+                    {
+                        "Email": email_lead.email,
+                        "Location": email_lead.location or "",
+                        "informalIndustry": (
+                            (email_lead.custom_fields or {}).get("informalIndustry", "")
+                            if email_lead.custom_fields
+                            else ""
+                        ),
+                        # Add other fields as needed
+                    }
+                )
+            st.session_state["raw_leads"] = raw_leads
+            st.success(f"Downloaded {len(raw_leads)} leads from API.")
+    else:
+        if "raw_leads" not in st.session_state:
+            st.stop()
+        raw_leads = st.session_state["raw_leads"]
 
 # Filters
 blocklisted_industries = st.text_input(
@@ -234,6 +289,13 @@ whitelisted_industries = st.text_input(
 whitelisted_areas = st.text_input(
     "Whitelisted areas (semicolon separated)", key="whitelisted_areas"
 )
+location_filter_method = st.radio(
+    "Location filter method",
+    options=["GPT", "Exact Zip Code Match"],
+    index=0,
+    key="location_filter_method",
+)
+exact_zip_match = location_filter_method == "Exact Zip Code Match"
 
 # ========================== Actions ==========================
 
@@ -246,6 +308,7 @@ if st.button("🚀 Filter and Upload Leads", key="filter_upload_btn"):
                 blocklisted_industries=blocklisted_industries,
                 whitelisted_industries=whitelisted_industries,
                 whitelisted_areas=whitelisted_areas,
+                exact_zip_match=exact_zip_match,
             )
         )
         if not leads_to_remove:
@@ -268,18 +331,18 @@ if st.button("🚀 Filter and Upload Leads", key="filter_upload_btn"):
             ss.leads_to_remove = leads_to_remove
             ss.filtered_blob_url = url
 
-            # Precompute campaign leads & mapping
-            leads = get_campaign_leads_by_id_with_mapping(
-                campaign_id=int(ss.selected_campaign_id)
-            )
+            # Precompute campaign leads & mapping (only if not already fetched)
+            if data_source == "Upload CSV":
+                ss.leads = get_campaign_leads_by_id_with_mapping(
+                    campaign_id=int(ss.selected_campaign_id)
+                )
 
             # Match by email
             ss.lead_details = [
-                {"leadId": lead["email_lead"]["id"], "leadMappingId": lead["id"]}
-                for lead in leads
+                {"leadId": lead.email_lead.id, "leadMappingId": lead.id}
+                for lead in ss.leads
                 if any(
-                    ltr.get("Email") == (lead.get("email_lead") or {}).get("email")
-                    for ltr in leads_to_remove
+                    ltr.get("Email") == lead.email_lead.email for ltr in leads_to_remove
                 )
             ]
 

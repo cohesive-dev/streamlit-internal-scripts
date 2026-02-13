@@ -219,3 +219,34 @@ class SmartleadGetCampaignSequencesViaGraphQLData(BaseModel):
 
 class SmartleadGetCampaignSequencesViaGraphQLResponse(BaseModel):
     data: SmartleadGetCampaignSequencesViaGraphQLData
+
+
+class EmailLead(BaseModel):
+    id: int
+    email: str
+    last_name: Optional[str] = None
+    first_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    company_name: Optional[str] = None
+    website: Optional[str] = None
+    company_url: Optional[str] = None
+    location: Optional[str] = None
+    custom_fields: Optional[Dict[str, Any]] = None
+    linkedin_profile: Optional[str] = None
+    esp_domain_type: Optional[int] = None
+    seg_type: Optional[int] = None
+
+
+class LinkedinCookie(BaseModel):
+    token_name: str
+
+
+class SmartleadCampaignLeadMapping(BaseModel):
+    id: int
+    status: str
+    current_seq_num: Optional[int] = None
+    email_campaign_seq_id: Optional[int] = None
+    last_sent_time: Optional[str] = None
+    next_timestamp_to_reach: Optional[str] = None
+    email_lead: EmailLead
+    linkedin_cookie: Optional[LinkedinCookie] = None
