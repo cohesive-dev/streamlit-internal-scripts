@@ -63,6 +63,9 @@ for key, default in [
 
 st.title("Set Up MailIn Inboxes")
 
+client_ip = get_client_ip()
+st.write(f"Server IP: {client_ip}")
+
 
 def add_log(msg: str):
     ss.mailin_log.append(msg)
