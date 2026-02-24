@@ -75,6 +75,10 @@ nav = st.navigation(
             "pages/va/setup_organization_phone.py",
             title="Set Up Organization Phone",
         ),
+        st.Page(
+            "pages/va/setup_mailin_inboxes.py",
+            title="Set Up MailIn Inboxes",
+        ),
     ]
 )
 nav.run()
