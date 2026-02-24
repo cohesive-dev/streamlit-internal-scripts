@@ -1,6 +1,6 @@
 """
 Set Up MailIn Inboxes — Full pipeline:
-Transfer domains → Set NS → Poll activation → Create mailboxes → Export to Smartlead → Tag
+Transfer domains → Set NS → Poll activation → Create mailboxes → Export to Smartlead
 """
 
 import streamlit as st
@@ -31,12 +31,10 @@ PERSONA_POOL = [
     {"first": "Caitlin", "last": "Morgan"},
     {"first": "Chloe", "last": "Whitman"},
 ]
-MAILBOXES_PER_DOMAIN = 3
 SMTP_HOST = "mail.getcohesiveaihq.biz"
 SMTP_PORT = 465
 IMAP_HOST = "mail.getcohesiveaihq.biz"
 IMAP_PORT = 993
-SMARTLEAD_TAG_ID = 318575
 
 POLL_INTERVAL = 30  # seconds between activation checks
 POLL_MAX_WAIT = 1200  # 20 minutes max
@@ -54,6 +52,9 @@ for key, default in [
     ("mailin_pending", []),
     ("mailin_mailbox_results", []),
     ("mailin_smartlead_results", []),
+    ("mailin_inbox_count", 3),
+    ("mailin_name_mode", "Random names"),
+    ("mailin_custom_names", {}),  # {domain: {"first": ..., "last": ...}}
     ("mailin_log", []),
 ]:
     ss.setdefault(key, default)
@@ -85,18 +86,64 @@ if ss.mailin_phase == "input":
         placeholder="example1.com\nexample2.org\nexample3.biz",
     )
 
+    st.subheader("Inbox Options")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        inbox_count = st.radio("Inboxes per domain", [2, 3], index=1, horizontal=True)
+    with col_b:
+        name_mode = st.radio("Name mode", ["Random names", "Custom name"], horizontal=True)
+
+    # Show per-domain name inputs when custom mode is selected
+    parsed_domains = [d.strip() for d in domains_text.strip().splitlines() if d.strip()]
+    custom_names = {}
+
+    if name_mode == "Custom name":
+        if inbox_count == 2:
+            st.caption("Emails per domain: `first@domain`, `first.last@domain`")
+        else:
+            st.caption("Emails per domain: `first@domain`, `first.last@domain`, `flast@domain`")
+
+        if parsed_domains:
+            st.divider()
+            for domain in parsed_domains:
+                col_d, col_f, col_l = st.columns([2, 1, 1])
+                with col_d:
+                    st.text(domain)
+                with col_f:
+                    first = st.text_input("First", key=f"first_{domain}", label_visibility="collapsed", placeholder="First name")
+                with col_l:
+                    last = st.text_input("Last", key=f"last_{domain}", label_visibility="collapsed", placeholder="Last name")
+                custom_names[domain] = {"first": first.strip(), "last": last.strip()}
+        else:
+            st.info("Enter domains above to configure names.")
+
     if st.button("Start Setup", type="primary"):
-        domains = [d.strip() for d in domains_text.strip().splitlines() if d.strip()]
-        if not domains:
+        if not parsed_domains:
             st.error("Please enter at least one domain.")
+        elif name_mode == "Custom name":
+            # Validate all names are filled
+            missing = [d for d, n in custom_names.items() if not n["first"] or not n["last"]]
+            if missing:
+                st.error(f"Missing names for: {', '.join(missing)}")
+            else:
+                ss.mailin_domains_input = domains_text
+                ss.mailin_inbox_count = inbox_count
+                ss.mailin_name_mode = name_mode
+                ss.mailin_custom_names = custom_names
+                ss.mailin_phase = "running"
+                ss.mailin_log = []
+                st.rerun()
         else:
             ss.mailin_domains_input = domains_text
+            ss.mailin_inbox_count = inbox_count
+            ss.mailin_name_mode = name_mode
+            ss.mailin_custom_names = {}
             ss.mailin_phase = "running"
             ss.mailin_log = []
             st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STEPS 2-7: Run Pipeline
+# STEPS 2-6: Run Pipeline
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if ss.mailin_phase == "running":
@@ -244,19 +291,40 @@ if ss.mailin_phase == "running":
     mb_progress = st.progress(0)
     mb_status = st.empty()
 
+    inbox_count = ss.mailin_inbox_count
+    name_mode = ss.mailin_name_mode
+
     mailbox_results = []
     for i, domain in enumerate(activated):
         mb_status.text(f"Creating mailboxes for {domain['name']}...")
-        # Pick random personas for this domain (no duplicates within a domain)
-        personas = random.sample(PERSONA_POOL, MAILBOXES_PER_DOMAIN)
-        mailboxes_spec = [
-            {
-                "username": f"{p['first'].lower()}@{domain['name']}",
-                "name": f"{p['first']} {p['last']}",
-                "password": f"Cohesive2026{p['first'][:2].title()}",
-            }
-            for p in personas
-        ]
+
+        if name_mode == "Custom name":
+            names = ss.mailin_custom_names.get(domain["name"], {})
+            first = names.get("first", "")
+            last = names.get("last", "")
+            display_name = f"{first} {last}"
+            password = f"Cohesive2026{first[:2].title()}"
+            # Email variations in order: first@, first.last@, flast@
+            variations = [
+                f"{first.lower()}@{domain['name']}",
+                f"{first.lower()}.{last.lower()}@{domain['name']}",
+                f"{first[0].lower()}{last.lower()}@{domain['name']}",
+            ]
+            mailboxes_spec = [
+                {"username": variations[j], "name": display_name, "password": password}
+                for j in range(inbox_count)
+            ]
+        else:
+            # Random personas
+            personas = random.sample(PERSONA_POOL, inbox_count)
+            mailboxes_spec = [
+                {
+                    "username": f"{p['first'].lower()}@{domain['name']}",
+                    "name": f"{p['first']} {p['last']}",
+                    "password": f"Cohesive2026{p['first'][:2].title()}",
+                }
+                for p in personas
+            ]
 
         try:
             result = create_mailboxes(domain["id"], mailboxes_spec)
@@ -378,50 +446,6 @@ if ss.mailin_phase == "running":
     sl_fail = sum(1 for r in smartlead_results if not r["ok"])
     st.success(f"Smartlead export: {sl_ok} success, {sl_fail} failed")
 
-    # ── Phase 6: Tag in Smartlead ─────────────────────────────────────────────
-    st.subheader("Step 7: Tagging in Smartlead")
-    account_ids = [r["smartlead_id"] for r in smartlead_results if r["ok"] and r["smartlead_id"]]
-
-    # If we have emails but no IDs, look them up by email
-    if not account_ids and sl_ok > 0:
-        add_log("No Smartlead IDs captured — looking up accounts by email...")
-        try:
-            all_sl_accounts = query_smartlead(
-                "email-accounts", "GET",
-                query_params={"offset": 0, "limit": 100},
-            )
-            email_set = {r["email"] for r in smartlead_results if r["ok"]}
-            for acct in all_sl_accounts:
-                if acct.get("from_email") in email_set:
-                    account_ids.append(acct["id"])
-            add_log(f"Found {len(account_ids)} accounts by email lookup")
-        except Exception as e:
-            add_log(f"Email lookup failed: {e}")
-
-    if account_ids:
-        tag_status = st.empty()
-        tag_ok = 0
-        tag_fail = 0
-        for i in range(0, len(account_ids), 25):
-            batch = account_ids[i : i + 25]
-            tag_status.text(f"Tagging batch {i // 25 + 1} ({len(batch)} accounts)...")
-            try:
-                query_smartlead(
-                    "email-accounts/tag-mapping",
-                    "POST",
-                    body={"email_account_ids": batch, "tag_ids": [SMARTLEAD_TAG_ID]},
-                )
-                tag_ok += len(batch)
-                add_log(f"Tagged batch {i // 25 + 1}: {len(batch)} accounts")
-            except Exception as e:
-                tag_fail += len(batch)
-                add_log(f"Tag error batch {i // 25 + 1}: {e}")
-            time.sleep(0.5)
-
-        st.success(f"Tagged {tag_ok} accounts, {tag_fail} failed")
-    else:
-        st.warning("No Smartlead accounts to tag.")
-
     # ── Done ──────────────────────────────────────────────────────────────────
     ss.mailin_phase = "done"
     st.rerun()
@@ -450,7 +474,7 @@ if ss.mailin_phase == "done":
     col2.metric("Activated", len(ss.mailin_activated))
     col3.metric(
         "Mailboxes",
-        sum(1 for r in ss.mailin_mailbox_results if r["status"] in ("ok", "timeout")) * 3,
+        sum(1 for r in ss.mailin_mailbox_results if r["status"] in ("ok", "timeout")) * ss.mailin_inbox_count,
     )
     col4.metric("In Smartlead", sum(1 for r in ss.mailin_smartlead_results if r["ok"]))
 
