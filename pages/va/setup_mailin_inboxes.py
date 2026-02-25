@@ -14,7 +14,7 @@ from clients.mailin.index import (
     create_mailboxes,
     get_mailbox_job_status,
 )
-from clients.namecheap.index import get_client_ip, set_custom_nameservers
+from clients.namecheap.index import set_custom_nameservers
 from clients.smartlead.index import query_smartlead
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -63,9 +63,6 @@ for key, default in [
 
 st.title("Set Up MailIn Inboxes")
 
-client_ip = get_client_ip()
-st.write(f"Server IP: {client_ip}")
-
 
 def add_log(msg: str):
     ss.mailin_log.append(msg)
@@ -94,7 +91,9 @@ if ss.mailin_phase == "input":
     with col_a:
         inbox_count = st.radio("Inboxes per domain", [2, 3], index=1, horizontal=True)
     with col_b:
-        name_mode = st.radio("Name mode", ["Random names", "Custom name"], horizontal=True)
+        name_mode = st.radio(
+            "Name mode", ["Random names", "Custom name"], horizontal=True
+        )
 
     # Show per-domain name inputs when custom mode is selected
     parsed_domains = [d.strip() for d in domains_text.strip().splitlines() if d.strip()]
@@ -104,7 +103,9 @@ if ss.mailin_phase == "input":
         if inbox_count == 2:
             st.caption("Emails per domain: `first@domain`, `first.last@domain`")
         else:
-            st.caption("Emails per domain: `first@domain`, `first.last@domain`, `flast@domain`")
+            st.caption(
+                "Emails per domain: `first@domain`, `first.last@domain`, `flast@domain`"
+            )
 
         if parsed_domains:
             st.divider()
@@ -113,9 +114,19 @@ if ss.mailin_phase == "input":
                 with col_d:
                     st.text(domain)
                 with col_f:
-                    first = st.text_input("First", key=f"first_{domain}", label_visibility="collapsed", placeholder="First name")
+                    first = st.text_input(
+                        "First",
+                        key=f"first_{domain}",
+                        label_visibility="collapsed",
+                        placeholder="First name",
+                    )
                 with col_l:
-                    last = st.text_input("Last", key=f"last_{domain}", label_visibility="collapsed", placeholder="Last name")
+                    last = st.text_input(
+                        "Last",
+                        key=f"last_{domain}",
+                        label_visibility="collapsed",
+                        placeholder="Last name",
+                    )
                 custom_names[domain] = {"first": first.strip(), "last": last.strip()}
         else:
             st.info("Enter domains above to configure names.")
@@ -125,7 +136,9 @@ if ss.mailin_phase == "input":
             st.error("Please enter at least one domain.")
         elif name_mode == "Custom name":
             # Validate all names are filled
-            missing = [d for d, n in custom_names.items() if not n["first"] or not n["last"]]
+            missing = [
+                d for d, n in custom_names.items() if not n["first"] or not n["last"]
+            ]
             if missing:
                 st.error(f"Missing names for: {', '.join(missing)}")
             else:
@@ -150,7 +163,9 @@ if ss.mailin_phase == "input":
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if ss.mailin_phase == "running":
-    domains = [d.strip() for d in ss.mailin_domains_input.strip().splitlines() if d.strip()]
+    domains = [
+        d.strip() for d in ss.mailin_domains_input.strip().splitlines() if d.strip()
+    ]
 
     # ── Phase 1: Transfer to MailIn ───────────────────────────────────────────
     st.subheader("Step 2: Transferring Domains to MailIn")
@@ -164,13 +179,16 @@ if ss.mailin_phase == "running":
         transfer_status.text(f"Transferring {domain_name}...")
         try:
             result = transfer_or_find_domain(domain_name)
-            transferred.append({
-                "name": result.get("name", domain_name),
-                "id": result["id"],
-                "name_servers": result.get("name_servers", ""),
-            })
+            transferred.append(
+                {
+                    "name": result.get("name", domain_name),
+                    "id": result["id"],
+                    "name_servers": result.get("name_servers", ""),
+                }
+            )
             add_log(f"Transferred: {domain_name} (ID {result['id']})")
         except Exception as e:
+            print(e)
             transfer_errors.append({"name": domain_name, "error": str(e)})
             add_log(f"FAIL transfer {domain_name}: {e}")
         transfer_progress.progress((i + 1) / len(domains))
@@ -196,22 +214,24 @@ if ss.mailin_phase == "running":
     ns_status = st.empty()
 
     ns_status.text("Fetching public IP...")
-    client_ip = get_client_ip()
-    add_log(f"Client IP: {client_ip}")
 
     ns_results = []
     for i, domain in enumerate(transferred):
         ns = domain["name_servers"]
         if not ns:
-            ns_results.append({**domain, "ns_ok": False, "ns_msg": "No nameservers assigned"})
+            ns_results.append(
+                {**domain, "ns_ok": False, "ns_msg": "No nameservers assigned"}
+            )
             add_log(f"SKIP NS {domain['name']}: no nameservers")
         else:
-            ok, msg = set_custom_nameservers(domain["name"], ns, client_ip)
+            ok, msg = set_custom_nameservers(domain["name"], ns)
             ns_results.append({**domain, "ns_ok": ok, "ns_msg": msg})
             add_log(f"NS {'OK' if ok else 'FAIL'} {domain['name']}: {msg}")
             time.sleep(1.5)  # Namecheap rate limit
 
-        ns_status.text(f"Set NS for {domain['name']} — {'OK' if ns_results[-1]['ns_ok'] else 'FAIL'}")
+        ns_status.text(
+            f"Set NS for {domain['name']} — {'OK' if ns_results[-1]['ns_ok'] else 'FAIL'}"
+        )
         ns_progress.progress((i + 1) / len(transferred))
 
     ss.mailin_ns_results = ns_results
@@ -221,7 +241,9 @@ if ss.mailin_phase == "running":
     if ns_failed:
         st.warning(f"{len(ns_failed)} domain(s) failed NS setting:")
         st.dataframe(
-            pd.DataFrame([{"Domain": d["name"], "Error": d["ns_msg"]} for d in ns_failed]),
+            pd.DataFrame(
+                [{"Domain": d["name"], "Error": d["ns_msg"]} for d in ns_failed]
+            ),
             use_container_width=True,
         )
     st.success(f"Nameservers set for {len(ns_succeeded)}/{len(transferred)} domains")
@@ -249,7 +271,10 @@ if ss.mailin_phase == "running":
         for did, dname in list(pending.items()):
             try:
                 d = get_domain(did)
-                if str(d.get("status")) == "1" and str(d.get("name_server_status")) == "1":
+                if (
+                    str(d.get("status")) == "1"
+                    and str(d.get("name_server_status")) == "1"
+                ):
                     activated.append({"id": did, "name": dname})
                     add_log(f"ACTIVATED: {dname}")
                 else:
@@ -339,52 +364,66 @@ if ss.mailin_phase == "running":
                 job_done = False
                 while (time.time() - job_start) < MAILBOX_JOB_TIMEOUT:
                     status_data = get_mailbox_job_status(uuid)
-                    status = status_data.get("status") or status_data.get("data", {}).get("status")
+                    status = status_data.get("status") or status_data.get(
+                        "data", {}
+                    ).get("status")
                     if status in ("completed", "1"):
-                        mailbox_results.append({
-                            "domain": domain["name"],
-                            "domain_id": domain["id"],
-                            "status": "ok",
-                            "mailboxes": mailboxes_spec,
-                        })
+                        mailbox_results.append(
+                            {
+                                "domain": domain["name"],
+                                "domain_id": domain["id"],
+                                "status": "ok",
+                                "mailboxes": mailboxes_spec,
+                            }
+                        )
                         add_log(f"Mailboxes created: {domain['name']}")
                         job_done = True
                         break
                     if status == "failed":
-                        mailbox_results.append({
-                            "domain": domain["name"],
-                            "domain_id": domain["id"],
-                            "status": "failed",
-                            "mailboxes": [],
-                        })
+                        mailbox_results.append(
+                            {
+                                "domain": domain["name"],
+                                "domain_id": domain["id"],
+                                "status": "failed",
+                                "mailboxes": [],
+                            }
+                        )
                         add_log(f"Mailbox job failed: {domain['name']}")
                         job_done = True
                         break
                     time.sleep(5)
 
                 if not job_done:
-                    mailbox_results.append({
+                    mailbox_results.append(
+                        {
+                            "domain": domain["name"],
+                            "domain_id": domain["id"],
+                            "status": "timeout",
+                            "mailboxes": mailboxes_spec,
+                        }
+                    )
+                    add_log(
+                        f"Mailbox job timeout: {domain['name']} (may complete in background)"
+                    )
+            else:
+                mailbox_results.append(
+                    {
                         "domain": domain["name"],
                         "domain_id": domain["id"],
-                        "status": "timeout",
-                        "mailboxes": mailboxes_spec,
-                    })
-                    add_log(f"Mailbox job timeout: {domain['name']} (may complete in background)")
-            else:
-                mailbox_results.append({
+                        "status": "error",
+                        "mailboxes": [],
+                    }
+                )
+                add_log(f"Mailbox creation error {domain['name']}: no UUID returned")
+        except Exception as e:
+            mailbox_results.append(
+                {
                     "domain": domain["name"],
                     "domain_id": domain["id"],
                     "status": "error",
                     "mailboxes": [],
-                })
-                add_log(f"Mailbox creation error {domain['name']}: no UUID returned")
-        except Exception as e:
-            mailbox_results.append({
-                "domain": domain["name"],
-                "domain_id": domain["id"],
-                "status": "error",
-                "mailboxes": [],
-            })
+                }
+            )
             add_log(f"Mailbox error {domain['name']}: {e}")
 
         mb_progress.progress((i + 1) / len(activated))
@@ -398,7 +437,11 @@ if ss.mailin_phase == "running":
     # ── Phase 5: Export to Smartlead ──────────────────────────────────────────
     st.subheader("Step 6: Exporting to Smartlead")
     # Collect all mailboxes from successful + timeout domains (timeout jobs usually complete)
-    export_domains = [r for r in mailbox_results if r["status"] in ("ok", "timeout") and r["mailboxes"]]
+    export_domains = [
+        r
+        for r in mailbox_results
+        if r["status"] in ("ok", "timeout") and r["mailboxes"]
+    ]
     all_mailboxes = []
     for r in export_domains:
         all_mailboxes.extend(r["mailboxes"])
@@ -428,18 +471,22 @@ if ss.mailin_phase == "running":
             # ID may be at resp["id"] or resp["data"]["id"]
             sl_id = resp.get("id") or (resp.get("data", {}) or {}).get("id")
             add_log(f"Smartlead OK: {mb['username']} (ID {sl_id}) raw={resp}")
-            smartlead_results.append({
-                "email": mb["username"],
-                "smartlead_id": sl_id,
-                "ok": True,
-            })
+            smartlead_results.append(
+                {
+                    "email": mb["username"],
+                    "smartlead_id": sl_id,
+                    "ok": True,
+                }
+            )
         except Exception as e:
-            smartlead_results.append({
-                "email": mb["username"],
-                "smartlead_id": None,
-                "ok": False,
-                "error": str(e),
-            })
+            smartlead_results.append(
+                {
+                    "email": mb["username"],
+                    "smartlead_id": None,
+                    "ok": False,
+                    "error": str(e),
+                }
+            )
             add_log(f"Smartlead FAIL: {mb['username']}: {e}")
         sl_progress.progress((i + 1) / len(all_mailboxes))
         time.sleep(0.5)
@@ -463,11 +510,13 @@ if ss.mailin_phase == "done":
     # Summary table
     rows = []
     for r in ss.mailin_smartlead_results:
-        rows.append({
-            "Email": r["email"],
-            "Smartlead ID": r.get("smartlead_id", ""),
-            "Status": "OK" if r["ok"] else r.get("error", "Failed"),
-        })
+        rows.append(
+            {
+                "Email": r["email"],
+                "Smartlead ID": r.get("smartlead_id", ""),
+                "Status": "OK" if r["ok"] else r.get("error", "Failed"),
+            }
+        )
     if rows:
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
@@ -477,7 +526,8 @@ if ss.mailin_phase == "done":
     col2.metric("Activated", len(ss.mailin_activated))
     col3.metric(
         "Mailboxes",
-        sum(1 for r in ss.mailin_mailbox_results if r["status"] in ("ok", "timeout")) * ss.mailin_inbox_count,
+        sum(1 for r in ss.mailin_mailbox_results if r["status"] in ("ok", "timeout"))
+        * ss.mailin_inbox_count,
     )
     col4.metric("In Smartlead", sum(1 for r in ss.mailin_smartlead_results if r["ok"]))
 
