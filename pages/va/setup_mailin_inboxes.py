@@ -15,7 +15,7 @@ from clients.mailin.index import (
     get_mailbox_job_status,
     forward_domain,
 )
-from clients.namecheap.index import get_client_ip, set_custom_nameservers
+from clients.namecheap.index import set_custom_nameservers
 from clients.smartlead.index import query_smartlead
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -225,10 +225,6 @@ if ss.mailin_phase == "running":
     ns_progress = st.progress(0)
     ns_status = st.empty()
 
-    ns_status.text("Fetching public IP...")
-    client_ip = get_client_ip()
-    add_log(f"Client IP: {client_ip}")
-
     ns_results = []
     for i, domain in enumerate(transferred):
         ns = domain["name_servers"]
@@ -236,7 +232,7 @@ if ss.mailin_phase == "running":
             ns_results.append({**domain, "ns_ok": False, "ns_msg": "No nameservers assigned"})
             add_log(f"SKIP NS {domain['name']}: no nameservers")
         else:
-            ok, msg = set_custom_nameservers(domain["name"], ns, client_ip)
+            ok, msg = set_custom_nameservers(domain["name"], ns)
             ns_results.append({**domain, "ns_ok": ok, "ns_msg": msg})
             add_log(f"NS {'OK' if ok else 'FAIL'} {domain['name']}: {msg}")
             time.sleep(1.5)  # Namecheap rate limit
