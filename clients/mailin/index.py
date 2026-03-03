@@ -113,6 +113,18 @@ def get_mailbox_job_status(uuid: str) -> dict:
     return resp.json()
 
 
+def forward_domain(domain_id: int, forward_to: str) -> dict:
+    """Forward a domain to another domain."""
+    resp = requests.post(
+        f"{MAILIN_BASE}/domains/forward",
+        headers=_headers(),
+        json={"domain_id": domain_id, "forward_to": forward_to},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_mailboxes_for_domain(domain_id: int) -> list[dict]:
     """Fetch all mailboxes for a domain (paginated)."""
     all_mailboxes = []
