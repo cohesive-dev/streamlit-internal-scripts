@@ -13,7 +13,7 @@ def set_custom_nameservers(
     Set custom nameservers for a domain via local API.
     Returns (success, message).
     """
-    url = "http://extension.cohesiveapp.com/api/nameservers"
+    url = "https://extension.cohesiveapp.com/api/nameservers"
     payload = {
         "domainName": domain_name,
         "nameservers": nameservers,
