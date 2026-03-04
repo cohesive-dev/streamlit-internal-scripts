@@ -12,11 +12,8 @@ import os
 from github import Github
 from typing import List, Any
 from datetime import datetime
-import concurrent.futures
-
 from common.utils import get_gpt_answer
 from common.spintax import validate_template
-import asyncio
 
 
 GITHUB_OWNER = "cohesive-dev"
@@ -51,7 +48,10 @@ def check_campaign_file_exists(
 
 
 def build_campaign_json(
-    campaign_id: int, sequences: List[Any], edited_variants: dict = None
+    campaign_id: int,
+    sequences: List[Any],
+    edited_variants: dict = None,
+    edited_subjects: dict = None,
 ) -> str:
     """Build campaign JSON string from sequences."""
     campaign_data = {
@@ -75,17 +75,23 @@ def build_campaign_json(
         if seq.sequence_variants:
             for variant in seq.sequence_variants:
                 key = f"seq_{seq.seq_number}_var_{variant.id}"
-                # Use edited variant if available
+                # Use edited variant body if available
                 email_body = (
                     edited_variants.get(key, variant.email_body)
                     if edited_variants
                     else variant.email_body
                 )
+                # Use edited subject if available
+                subject = (
+                    edited_subjects.get(key, variant.subject)
+                    if edited_subjects
+                    else variant.subject
+                )
 
                 variant_data = {
                     "id": variant.id,
                     "variant_label": variant.variant_label,
-                    "subject": variant.subject,
+                    "subject": subject,
                     "email_body": email_body,
                     "variant_distribution_percentage": variant.variant_distribution_percentage,
                 }
@@ -168,11 +174,11 @@ def has_variant_changed(original_text: str, edited_text: str) -> bool:
 
 
 def apply_gpt_editing(original_text: str, instruction: str) -> str:
-    """Apply GPT editing to the text based on user instruction."""
+    """Apply GPT editing to the email body based on user instruction."""
     system_prompt = (
         "Edit email content per user instructions. "
         "Preserve: spintax {option1|option2|option3}, line breaks, "
-        "and system variables (%sender_firstname%, %sender_name%, etc.). "
+        "and system variables (%sender-firstname%, %sender-name%, etc.). "
         "Return only the edited text."
     )
 
@@ -183,23 +189,29 @@ def apply_gpt_editing(original_text: str, instruction: str) -> str:
     return get_gpt_answer(system_prompt, user_prompt)
 
 
-async def edit_variant_async(variant, seq_number, index):
-    key = f"seq_{seq_number}_var_{variant.id}"
-    original_text = html_to_text(variant.email_body)
-    st.toast(f"Editing Sequence {index + 1}, Variant {variant.variant_label}...")
-    loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        edited_text = await loop.run_in_executor(
-            executor, apply_gpt_editing, original_text, instruction
-        )
-    return key, edited_text
+def apply_gpt_subject_editing(original_subject: str, instruction: str) -> str:
+    """Apply GPT editing to the subject line based on user instruction."""
+    system_prompt = (
+        "Edit the email subject line per user instructions. "
+        "Preserve: spintax {option1|option2|option3} "
+        "and system variables (%sender-firstname%, %sender-name%, etc.). "
+        "Return only the edited subject line, nothing else."
+    )
+
+    user_prompt = (
+        f"Original subject: {original_subject}\n\nEdit instruction: {instruction}"
+    )
+
+    return get_gpt_answer(system_prompt, user_prompt)
 
 
-async def process_all_variants():
-    tasks = []
-    for variant in seq.sequence_variants:
-        tasks.append(edit_variant_async(variant, seq.seq_number, index))
-    return await asyncio.gather(*tasks)
+def index_to_letter(i: int) -> str:
+    result = ""
+    i += 1
+    while i > 0:
+        i, rem = divmod(i - 1, 26)
+        result = chr(ord("A") + rem) + result
+    return result
 
 
 # Initialize session state
@@ -207,6 +219,8 @@ if "sequences" not in st.session_state:
     st.session_state.sequences = None
 if "edited_variants" not in st.session_state:
     st.session_state.edited_variants = {}
+if "edited_subjects" not in st.session_state:
+    st.session_state.edited_subjects = {}
 if "current_instruction" not in st.session_state:
     st.session_state.current_instruction = ""
 if "file_sha" not in st.session_state:
@@ -234,7 +248,6 @@ if st.button("Load Campaign", type="primary"):
 
             # Load sequences
             sequences = get_campaign_sequences(campaign_id)
-            sequences = sequences[:2]
             if sequences:
                 st.session_state.sequences = sequences
 
@@ -268,15 +281,19 @@ if st.button("Load Campaign", type="primary"):
                         f"Campaign loaded! File {campaign_id}.json already exists in repository."
                     )
 
-                # Initialize edited variants storage
+                # Initialize edited variants and subjects storage
                 st.session_state.edited_variants = {}
+                st.session_state.edited_subjects = {}
                 for seq in sequences:
                     if seq.sequence_variants:
                         for variant in seq.sequence_variants:
                             key = f"seq_{seq.seq_number}_var_{variant.id}"
-                            st.session_state.edited_variants[key] = html_to_text(
-                                variant.email_body
-                            )
+                            body_text = html_to_text(variant.email_body)
+                            st.session_state.edited_variants[key] = body_text
+                            st.session_state.edited_subjects[key] = variant.subject
+                            # Also set widget keys so widgets read from session state
+                            st.session_state[f"edited_{key}"] = body_text
+                            st.session_state[f"edited_subject_{key}"] = variant.subject
             else:
                 st.error("Failed to load campaign sequences")
         else:
@@ -286,28 +303,73 @@ if st.button("Load Campaign", type="primary"):
 if st.session_state.sequences:
     st.divider()
 
-    # Instruction input
+    # Per-sequence instruction inputs
     st.subheader("Edit Instructions")
-    instruction = st.text_area(
-        "Describe how you want to edit the campaign emails:",
-        placeholder="Example: Make the tone more professional and add a call-to-action at the end",
-        value=st.session_state.current_instruction,
-        key="instruction_input",
+    st.caption(
+        "Each sequence has its own prompts. Leave blank to skip editing that part."
     )
 
+    seq_instructions = {}
+    for index, seq in enumerate(st.session_state.sequences):
+        seq_label = "Initial Email" if index == 0 else f"Follow-up {index}"
+        with st.expander(
+            f"**{seq_label}** (Sequence {index + 1})", expanded=(index == 0)
+        ):
+            subj_instr = st.text_input(
+                "Subject line instruction:",
+                placeholder='Example: Change subject to "Selling"',
+                key=f"subject_instr_seq_{seq.seq_number}",
+            )
+            body_instr = st.text_area(
+                "Email body instruction:",
+                placeholder="Example: Add more spintax, make tone more professional",
+                key=f"body_instr_seq_{seq.seq_number}",
+            )
+            seq_instructions[seq.seq_number] = (subj_instr, body_instr)
+
     if st.button("Apply GPT Editing", type="primary"):
-        if instruction:
-            st.session_state.current_instruction = instruction
+        has_any_instruction = any(s or b for s, b in seq_instructions.values())
+        if not has_any_instruction:
+            st.warning("Please enter at least one editing instruction")
+        else:
             with st.spinner("Applying GPT editing to all variants..."):
                 for index, seq in enumerate(st.session_state.sequences):
+                    subj_instr, body_instr = seq_instructions.get(
+                        seq.seq_number, ("", "")
+                    )
+                    if not subj_instr and not body_instr:
+                        continue
                     if seq.sequence_variants:
-                        results = asyncio.run(process_all_variants())
-                        for key, edited_text in results:
-                            st.session_state.edited_variants[key] = edited_text
-                st.success("GPT editing applied to all variants!")
+                        for index, variant in enumerate(seq.sequence_variants):
+                            key = f"seq_{seq.seq_number}_var_{variant.id}"
+                            seq_label = (
+                                "Initial Email" if index == 0 else f"Follow-up {index}"
+                            )
+
+                            # Map variant index to capital letter (0 -> A, 1 -> B, ...)
+
+                            letter = index_to_letter(index)
+                            st.toast(
+                                f"Editing {seq_label}, Variant {letter} ({variant.id})..."
+                            )
+
+                            if body_instr:
+                                original_text = html_to_text(variant.email_body)
+                                edited_text = apply_gpt_editing(
+                                    original_text, body_instr
+                                )
+                                st.session_state.edited_variants[key] = edited_text
+                                st.session_state[f"edited_{key}"] = edited_text
+
+                            if subj_instr:
+                                edited_subj = apply_gpt_subject_editing(
+                                    variant.subject, subj_instr
+                                )
+                                st.session_state.edited_subjects[key] = edited_subj
+                                st.session_state[f"edited_subject_{key}"] = edited_subj
+
+                st.success("GPT editing applied!")
                 st.rerun()
-        else:
-            st.warning("Please enter editing instructions")
 
     st.divider()
 
@@ -315,7 +377,8 @@ if st.session_state.sequences:
     st.subheader("Review and Edit Variants")
 
     for index, seq in enumerate(st.session_state.sequences):
-        st.markdown(f"### Sequence {index + 1}")
+        seq_label = "Initial Email" if index == 0 else f"Follow-up {index}"
+        st.markdown(f"### {seq_label} (Sequence {index + 1})")
         st.markdown(f"**Subject:** {seq.subject}")
 
         if seq.sequence_variants:
@@ -323,7 +386,10 @@ if st.session_state.sequences:
                 key = f"seq_{seq.seq_number}_var_{variant.id}"
                 original_text = html_to_text(variant.email_body)
                 edited_text = st.session_state.edited_variants.get(key, original_text)
-                is_changed = has_variant_changed(original_text, edited_text)
+                edited_subj = st.session_state.edited_subjects.get(key, variant.subject)
+                is_changed = has_variant_changed(original_text, edited_text) or (
+                    variant.subject.strip() != edited_subj.strip()
+                )
 
                 # Validate template
                 validation_result = validate_template(edited_text)
@@ -332,7 +398,7 @@ if st.session_state.sequences:
                 # Create expander label with change and error indicators
                 change_indicator = "🔄 " if is_changed else ""
                 error_indicator = "❌ " if has_errors else ""
-                expander_label = f"{error_indicator}{change_indicator}Variant {variant.variant_label} (ID: {variant.id})"
+                expander_label = f"{error_indicator}{change_indicator}Variant {index_to_letter(idx)} (ID: {variant.id})"
 
                 with st.expander(
                     expander_label,
@@ -376,9 +442,27 @@ if st.session_state.sequences:
                             "⚠️ <strong>This variant has been modified</strong></div>",
                             unsafe_allow_html=True,
                         )
-                    st.markdown(f"**Subject:** {variant.subject}")
+                    # Subject line editing
+                    subj_col1, subj_col2 = st.columns(2)
+                    with subj_col1:
+                        st.markdown("**Original Subject**")
+                        st.text_input(
+                            "Original Subject",
+                            value=variant.subject,
+                            disabled=True,
+                            key=f"original_subject_{key}",
+                            label_visibility="collapsed",
+                        )
+                    with subj_col2:
+                        st.markdown("**Edited Subject**")
+                        edited_subject = st.text_input(
+                            "Edited Subject",
+                            key=f"edited_subject_{key}",
+                            label_visibility="collapsed",
+                        )
+                        st.session_state.edited_subjects[key] = edited_subject
 
-                    # Split view - Before and After
+                    # Email body editing - Split view
                     col1, col2 = st.columns(2)
 
                     with col1:
@@ -396,14 +480,10 @@ if st.session_state.sequences:
                         st.markdown("**After (Edited - Editable)**")
                         edited_text = st.text_area(
                             "Edited",
-                            value=st.session_state.edited_variants.get(
-                                key, original_text
-                            ),
                             height=300,
                             key=f"edited_{key}",
                             label_visibility="collapsed",
                         )
-                        # Update session state when user edits
                         st.session_state.edited_variants[key] = edited_text
 
         st.divider()
@@ -423,11 +503,12 @@ if st.session_state.sequences:
             st.error("GitHub repository not initialized. Please reload the campaign.")
         else:
             with st.spinner("Saving and committing changes..."):
-                # Build JSON content with edited variants
+                # Build JSON content with edited variants and subjects
                 content = build_campaign_json(
                     campaign_id,
                     st.session_state.sequences,
                     st.session_state.edited_variants,
+                    st.session_state.edited_subjects,
                 )
 
                 # Commit to GitHub
@@ -452,17 +533,20 @@ if st.session_state.sequences:
                             seq_variants = None
                             if seq.sequence_variants:
                                 seq_variants = []
-                                for variant in seq.sequence_variants:
+                                for index, variant in enumerate(seq.sequence_variants):
                                     key = f"{key_base}_var_{variant.id}"
                                     edited_body = st.session_state.edited_variants.get(
                                         key, html_to_text(variant.email_body)
                                     )
+                                    edited_subj = st.session_state.edited_subjects.get(
+                                        key, variant.subject
+                                    )
                                     seq_variants.append(
                                         {
                                             "id": variant.id,
-                                            "subject": variant.subject,
+                                            "subject": edited_subj,
                                             "email_body": text_to_html(edited_body),
-                                            "variant_label": variant.variant_label,
+                                            "variant_label": index_to_letter(index),
                                             "variant_distribution_percentage": variant.variant_distribution_percentage,
                                         }
                                     )
@@ -483,24 +567,6 @@ if st.session_state.sequences:
                                     seq_variants=seq_variants,
                                 )
                             )
-
-                        # Clone sequences until length exceeds original
-                        original_length = len(st.session_state.sequences)
-                        while len(input_sequences) <= original_length:
-                            # Clone the last 2 elements
-                            for seq in input_sequences[-2:]:
-                                if len(input_sequences) > original_length:
-                                    break
-                                # Create a copy of the sequence with a new seq_number
-                                cloned_seq = SmartleadCampaignSequenceInput(
-                                    id=None,  # New sequence, no existing ID
-                                    seq_number=len(input_sequences) + 1,
-                                    subject=seq.subject,
-                                    email_body=seq.email_body,
-                                    seq_delay_details=seq.seq_delay_details,
-                                    seq_variants=seq.seq_variants,
-                                )
-                                input_sequences.append(cloned_seq)
 
                         add_sequences_to_campaign(
                             campaign_id=campaign_id,
