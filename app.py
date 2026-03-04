@@ -68,6 +68,10 @@ nav = st.navigation(
             title="Edit Campaign Template",
         ),
         st.Page(
+            "pages/va/edit_campaign_v2.py",
+            title="Edit Campaign Template V2 Beta",
+        ),
+        st.Page(
             "pages/va/revert_campaign_template.py",
             title="Revert Campaign Template",
         ),
