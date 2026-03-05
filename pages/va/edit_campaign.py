@@ -174,7 +174,9 @@ def has_variant_changed(original_text: str, edited_text: str) -> bool:
     return original_text.strip() != edited_text.strip()
 
 
-def apply_gpt_editing(original_text: str, instruction: str) -> str:
+def apply_gpt_editing(original_text: str, instruction: str | None) -> str:
+    if not instruction:
+        return original_text
     """Apply GPT editing to the email body based on user instruction."""
     system_prompt = (
         "Edit email content per user instructions. "
@@ -190,7 +192,9 @@ def apply_gpt_editing(original_text: str, instruction: str) -> str:
     return get_gpt_answer(system_prompt, user_prompt)
 
 
-def apply_gpt_subject_editing(original_subject: str, instruction: str) -> str:
+def apply_gpt_subject_editing(original_subject: str, instruction: str | None) -> str:
+    if not instruction:
+        return original_subject
     """Apply GPT editing to the subject line based on user instruction."""
     system_prompt = (
         "Edit the email subject line per user instructions. "
