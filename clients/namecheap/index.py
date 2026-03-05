@@ -22,7 +22,7 @@ def set_custom_nameservers(
     for attempt in range(retries):
         try:
             resp = requests.post(url, json=payload, timeout=15)
-            if resp.status_code == 200:
+            if resp.status_code == 200 and resp.json().get("success"):
                 return True, "OK"
             else:
                 return False, f"HTTP {resp.status_code}: {resp.text}"

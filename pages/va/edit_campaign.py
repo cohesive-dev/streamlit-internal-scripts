@@ -9,6 +9,7 @@ import streamlit as st
 import json
 import base64
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from github import Github
 from typing import List, Any
 from datetime import datetime
@@ -60,10 +61,10 @@ def build_campaign_json(
         "sequences": [],
     }
 
-    for seq in sequences:
+    for seq_idx, seq in enumerate(sequences):
         seq_data = {
             "id": seq.id,
-            "seq_number": seq.seq_number,
+            "seq_number": seq_idx + 1,
             "subject": seq.subject,
             "email_body": seq.email_body,
             "seq_delay_details": (
@@ -73,8 +74,8 @@ def build_campaign_json(
         }
 
         if seq.sequence_variants:
-            for variant in seq.sequence_variants:
-                key = f"seq_{seq.seq_number}_var_{variant.id}"
+            for var_idx, variant in enumerate(seq.sequence_variants):
+                key = get_variant_index(seq_idx, var_idx)
                 # Use edited variant body if available
                 email_body = (
                     edited_variants.get(key, variant.email_body)
@@ -214,6 +215,10 @@ def index_to_letter(i: int) -> str:
     return result
 
 
+def get_variant_index(sequence_idx: int, variant_idx: int) -> str:
+    return f"sequence {sequence_idx + 1}, variant {index_to_letter(variant_idx)}"
+
+
 # Initialize session state
 if "sequences" not in st.session_state:
     st.session_state.sequences = None
@@ -284,10 +289,10 @@ if st.button("Load Campaign", type="primary"):
                 # Initialize edited variants and subjects storage
                 st.session_state.edited_variants = {}
                 st.session_state.edited_subjects = {}
-                for seq in sequences:
+                for seq_idx, seq in enumerate(sequences):
                     if seq.sequence_variants:
-                        for variant in seq.sequence_variants:
-                            key = f"seq_{seq.seq_number}_var_{variant.id}"
+                        for var_idx, variant in enumerate(seq.sequence_variants):
+                            key = get_variant_index(seq_idx, var_idx)
                             body_text = html_to_text(variant.email_body)
                             st.session_state.edited_variants[key] = body_text
                             st.session_state.edited_subjects[key] = variant.subject
@@ -310,65 +315,89 @@ if st.session_state.sequences:
     )
 
     seq_instructions = {}
-    for index, seq in enumerate(st.session_state.sequences):
-        seq_label = "Initial Email" if index == 0 else f"Follow-up {index}"
+    for seq_idx, seq in enumerate(st.session_state.sequences):
+        seq_label = "Initial Email" if seq_idx == 0 else f"Follow-up {seq_idx}"
         with st.expander(
-            f"**{seq_label}** (Sequence {index + 1})", expanded=(index == 0)
+            f"**{seq_label}** (Sequence {seq_idx + 1})", expanded=(seq_idx == 0)
         ):
             subj_instr = st.text_input(
                 "Subject line instruction:",
                 placeholder='Example: Change subject to "Selling"',
-                key=f"subject_instr_seq_{seq.seq_number}",
+                key=f"subject_instr_seq_{seq_idx + 1}",
             )
             body_instr = st.text_area(
                 "Email body instruction:",
                 placeholder="Example: Add more spintax, make tone more professional",
-                key=f"body_instr_seq_{seq.seq_number}",
+                key=f"body_instr_seq_{seq_idx + 1}",
             )
-            seq_instructions[seq.seq_number] = (subj_instr, body_instr)
+            seq_instructions[seq_idx + 1] = (subj_instr, body_instr)
 
     if st.button("Apply GPT Editing", type="primary"):
         has_any_instruction = any(s or b for s, b in seq_instructions.values())
         if not has_any_instruction:
             st.warning("Please enter at least one editing instruction")
         else:
-            with st.spinner("Applying GPT editing to all variants..."):
-                for index, seq in enumerate(st.session_state.sequences):
-                    subj_instr, body_instr = seq_instructions.get(
-                        seq.seq_number, ("", "")
-                    )
-                    if not subj_instr and not body_instr:
-                        continue
-                    if seq.sequence_variants:
-                        for index, variant in enumerate(seq.sequence_variants):
-                            key = f"seq_{seq.seq_number}_var_{variant.id}"
-                            seq_label = (
-                                "Initial Email" if index == 0 else f"Follow-up {index}"
-                            )
+            # Build a flat list of (key, original_body, original_subject, body_instr, subj_instr)
+            # tasks for every variant that has at least one instruction.
+            tasks = []
+            for seq_idx, seq in enumerate(st.session_state.sequences):
+                subj_instr, body_instr = seq_instructions.get(seq_idx + 1, (None, None))
+                if not subj_instr and not body_instr:
+                    continue
+                if seq.sequence_variants:
+                    for var_idx, variant in enumerate(seq.sequence_variants):
+                        key = get_variant_index(seq_idx, var_idx)
+                        tasks.append(
+                            {
+                                "key": key,
+                                "original_body": html_to_text(variant.email_body),
+                                "original_subject": variant.subject,
+                                "body_instr": body_instr,
+                                "subj_instr": subj_instr,
+                            }
+                        )
 
-                            # Map variant index to capital letter (0 -> A, 1 -> B, ...)
+            if not tasks:
+                st.warning("No variants found for sequences with instructions.")
+            else:
 
-                            letter = index_to_letter(index)
-                            st.toast(
-                                f"Editing {seq_label}, Variant {letter} ({variant.id})..."
-                            )
+                def _edit_variant(task: dict) -> dict:
+                    """Run GPT edits for one variant. Safe to call from a thread."""
+                    result = {"key": task["key"], "body": None, "subject": None}
+                    if task["body_instr"]:
+                        result["body"] = apply_gpt_editing(
+                            task["original_body"], task["body_instr"]
+                        )
+                    if task["subj_instr"]:
+                        result["subject"] = apply_gpt_subject_editing(
+                            task["original_subject"], task["subj_instr"]
+                        )
+                    return result
 
-                            if body_instr:
-                                original_text = html_to_text(variant.email_body)
-                                edited_text = apply_gpt_editing(
-                                    original_text, body_instr
-                                )
-                                st.session_state.edited_variants[key] = edited_text
-                                st.session_state[f"edited_{key}"] = edited_text
+                for t in tasks:
+                    if t["body_instr"]:
+                        st.toast(f"Editing body: {t['key']}")
+                    if t["subj_instr"]:
+                        st.toast(f"Editing subject: {t['key']}")
 
-                            if subj_instr:
-                                edited_subj = apply_gpt_subject_editing(
-                                    variant.subject, subj_instr
-                                )
-                                st.session_state.edited_subjects[key] = edited_subj
-                                st.session_state[f"edited_subject_{key}"] = edited_subj
+                with st.spinner(
+                    f"Applying GPT editing to {len(tasks)} variant(s) of sequence  in parallel..."
+                ):
+                    with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as executor:
+                        futures = {executor.submit(_edit_variant, t): t for t in tasks}
+                        for future in as_completed(futures):
+                            res = future.result()
+                            key = res["key"]
+                            if res["body"] is not None:
+                                st.session_state.edited_variants[key] = res["body"]
+                                st.session_state[f"edited_{key}"] = res["body"]
+                            if res["subject"] is not None:
+                                st.session_state.edited_subjects[key] = res["subject"]
+                                st.session_state[f"edited_subject_{key}"] = res[
+                                    "subject"
+                                ]
 
-                st.success("GPT editing applied!")
+                st.success(f"GPT editing applied to {len(tasks)} variant(s)!")
                 st.rerun()
 
     st.divider()
@@ -376,14 +405,14 @@ if st.session_state.sequences:
     # Review variants
     st.subheader("Review and Edit Variants")
 
-    for index, seq in enumerate(st.session_state.sequences):
-        seq_label = "Initial Email" if index == 0 else f"Follow-up {index}"
-        st.markdown(f"### {seq_label} (Sequence {index + 1})")
+    for seq_idx, seq in enumerate(st.session_state.sequences):
+        seq_label = "Initial Email" if seq_idx == 0 else f"Follow-up {seq_idx}"
+        st.markdown(f"### {seq_label} (Sequence {seq_idx + 1})")
         st.markdown(f"**Subject:** {seq.subject}")
 
         if seq.sequence_variants:
-            for idx, variant in enumerate(seq.sequence_variants):
-                key = f"seq_{seq.seq_number}_var_{variant.id}"
+            for var_idx, variant in enumerate(seq.sequence_variants):
+                key = get_variant_index(seq_idx, var_idx)
                 original_text = html_to_text(variant.email_body)
                 edited_text = st.session_state.edited_variants.get(key, original_text)
                 edited_subj = st.session_state.edited_subjects.get(key, variant.subject)
@@ -398,11 +427,11 @@ if st.session_state.sequences:
                 # Create expander label with change and error indicators
                 change_indicator = "🔄 " if is_changed else ""
                 error_indicator = "❌ " if has_errors else ""
-                expander_label = f"{error_indicator}{change_indicator}Variant {index_to_letter(idx)} (ID: {variant.id})"
+                expander_label = f"{error_indicator}{change_indicator}Variant {index_to_letter(var_idx)} (ID: {variant.id})"
 
                 with st.expander(
                     expander_label,
-                    expanded=(idx == 0 or is_changed or has_errors),
+                    expanded=(var_idx == 0 or is_changed or has_errors),
                 ):
                     # Show validation errors at the top
                     if has_errors:
@@ -526,15 +555,14 @@ if st.session_state.sequences:
                     # Update Smartlead campaign with edited sequences
                     try:
                         input_sequences = []
-                        for seq in st.session_state.sequences:
-                            key_base = f"seq_{seq.seq_number}"
-
-                            # Build variants list if available
+                        for seq_idx, seq in enumerate(st.session_state.sequences):
                             seq_variants = None
                             if seq.sequence_variants:
                                 seq_variants = []
-                                for index, variant in enumerate(seq.sequence_variants):
-                                    key = f"{key_base}_var_{variant.id}"
+                                for var_idx, variant in enumerate(
+                                    seq.sequence_variants
+                                ):
+                                    key = get_variant_index(seq_idx, var_idx)
                                     edited_body = st.session_state.edited_variants.get(
                                         key, html_to_text(variant.email_body)
                                     )
@@ -546,7 +574,7 @@ if st.session_state.sequences:
                                             "id": variant.id,
                                             "subject": edited_subj,
                                             "email_body": text_to_html(edited_body),
-                                            "variant_label": index_to_letter(index),
+                                            "variant_label": index_to_letter(var_idx),
                                             "variant_distribution_percentage": variant.variant_distribution_percentage,
                                         }
                                     )
@@ -554,7 +582,7 @@ if st.session_state.sequences:
                             input_sequences.append(
                                 SmartleadCampaignSequenceInput(
                                     id=seq.id,
-                                    seq_number=seq.seq_number,
+                                    seq_number=seq_idx + 1,
                                     subject=seq.subject,
                                     email_body=seq.email_body,
                                     seq_delay_details=(
