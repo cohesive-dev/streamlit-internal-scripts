@@ -79,9 +79,9 @@ nav = st.navigation(
             "pages/va/setup_mailin_inboxes.py",
             title="Set Up MailIn Inboxes",
         ),
-        st.Page(
-            "pages/va/setup_mailin_inboxes_v2.py", title="Set Up MailIn Inboxes V2"
-        ),
+        # st.Page(
+        #     "pages/va/setup_mailin_inboxes_v2.py", title="Set Up MailIn Inboxes V2"
+        # ),
     ]
 )
 nav.run()
