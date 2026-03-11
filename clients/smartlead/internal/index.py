@@ -222,7 +222,6 @@ def get_campaign_leads_by_id_with_mapping(
       seg_type
     }
     """
-
     response = query_smartlead_internal_graphql_endpoint(
         method="POST",
         body={
@@ -232,7 +231,14 @@ def get_campaign_leads_by_id_with_mapping(
         },
     )
     mappings = response["data"]["email_campaign_leads_mappings"]
-    return [SmartleadCampaignLeadMapping.model_validate(m) for m in mappings]
+    result = []
+    for m in mappings:
+        try:
+            result.append(SmartleadCampaignLeadMapping.model_validate(m))
+        except Exception as e:
+            print(f"Validation failed for mapping: {m}")
+            print(f"Error: {e}")
+    return result
 
 
 def query_smartlead_internal_rest_endpoint(
@@ -266,7 +272,7 @@ def query_smartlead_internal_rest_endpoint(
             headers=final_headers,
             json=body,
             params=query_params,
-            timeout=30,
+            timeout=120,
         )
         response.raise_for_status()
         return response.json()
@@ -291,7 +297,7 @@ def query_smartlead_internal_graphql_endpoint(
     headers: Optional[Dict[str, str]] = None,
     body: Optional[Any] = None,
     query_params: Optional[Dict[str, Any]] = None,
-    timeout: int = 30,
+    timeout: int = 120,
 ) -> Dict[str, Any]:
     INTERNAL_SMARTLEAD_GRAPHQL_API = "https://fe-gql.smartlead.ai/v1/graphql"
     token = os.getenv("SMARTLEAD_INTERNAL_API_TOKEN")
