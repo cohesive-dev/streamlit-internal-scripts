@@ -86,6 +86,10 @@ nav = st.navigation(
             "pages/va/check_and_edit_follow_ups.py",
             title="Check & Edit Follow-Up Jobs",
         ),
+        st.Page(
+            "pages/va/enable_auto_follow_up.py",
+            title="Enable/Disable Auto Follow-Up",
+        ),
     ]
 )
 nav.run()
