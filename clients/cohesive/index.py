@@ -53,5 +53,5 @@ def auto_schedule_restart_lead_generation_jobs(
         body={"leadGenerationJobIds": lead_generation_job_ids},
         query_params=None,
         headers=None,
-        timeout=120,
+        timeout=12000,
     )
