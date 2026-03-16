@@ -159,7 +159,7 @@ edited = st.data_editor(
 
 selected_ids = edited.loc[edited["selected"], "id"].tolist()
 
-_, _, _, col3, col4 = st.columns([1, 1, 1, 1], gap="small")
+_, _, col3, col4 = st.columns([1, 1, 1, 1], gap="small")
 
 with col3:
     if st.button("Mark as Completed", type="primary", disabled=not selected_ids):
