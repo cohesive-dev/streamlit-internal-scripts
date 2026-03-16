@@ -147,7 +147,7 @@ class SmartleadCampaignSequenceVariant(BaseModel):
     id: int
     created_at: datetime  # z.string().datetime()
     updated_at: datetime  # z.string().datetime()
-    is_deleted: bool
+    is_deleted: Optional[bool] = None
     subject: str
     email_body: str
     email_campaign_seq_id: int

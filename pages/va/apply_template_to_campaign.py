@@ -49,7 +49,7 @@ def apply_template_to_campaign_helper(
         if index < len(current_sequences):
             existing_id = current_sequences[index].id
 
-        raw_variants = seq.sequence_variants or seq.seq_variants or None
+        raw_variants = seq.sequence_variants or None
         sequence_variants: Optional[List] = None
 
         if raw_variants:
