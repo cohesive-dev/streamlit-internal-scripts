@@ -4,9 +4,10 @@ import requests
 
 from ..smartlead.internal.index import query_smartlead_internal_graphql_endpoint
 
-BASE_LEAD_GENERATION_SERVICE_URL = (
-    "https://cohesive-lead-generation-hkdjgqbthtgfe6ah.eastus-01.azurewebsites.net/"
-)
+# BASE_LEAD_GENERATION_SERVICE_URL = (
+#     "https://cohesive-lead-generation-hkdjgqbthtgfe6ah.eastus-01.azurewebsites.net/"
+# )
+BASE_LEAD_GENERATION_SERVICE_URL = "http://localhost:4000/"
 COHESIVE_PLATFORM_URL = "https://extension.cohesiveapp.com/api/"
 
 

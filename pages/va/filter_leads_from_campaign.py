@@ -68,7 +68,10 @@ async def is_outside_whitelisted_area(
             f"Is the address {location} located within any of the whitelisted areas? "
             f"Answer strictly 'yes' or 'no'"
         )
-        ans = await asyncio.to_thread(get_gpt_answer, system, prompt)
+        try:
+            ans = await asyncio.to_thread(get_gpt_answer, system, prompt)
+        except Exception:
+            return True  # Treat as "no" (outside whitelist) to be safe
         return (ans or "").strip().lower() == "no"
 
 
@@ -85,7 +88,10 @@ async def is_in_blocklisted_industry(
         f"Does the industry {industry} match any of the blocklisted industries? "
         f"Answer strictly 'yes' or 'no'"
     )
-    ans = await asyncio.to_thread(get_gpt_answer, system, prompt)
+    try:
+        ans = await asyncio.to_thread(get_gpt_answer, system, prompt)
+    except Exception:
+        return True  # Treat as "yes" (blocklisted) to be safe
     return (ans or "").strip().lower() == "yes"
 
 
@@ -102,7 +108,10 @@ async def is_outside_whitelisted_industry(
         f"Does the industry {industry} stay within any of the whitelisted industries? "
         f"Answer strictly 'yes' or 'no'"
     )
-    ans = await asyncio.to_thread(get_gpt_answer, system, prompt, 0.2)
+    try:
+        ans = await asyncio.to_thread(get_gpt_answer, system, prompt, 0.2)
+    except Exception:
+        return True  # Treat as "no" (outside whitelist) to be safe
     return (ans or "").strip().lower() == "no"
 
 
@@ -119,6 +128,9 @@ async def process_leads(
     batches = list(chunk_list(raw_leads, 50))
     total_batches = len(batches)
 
+    blocklist_industry_cache: dict[str, bool] = {}
+    whitelist_industry_cache: dict[str, bool] = {}
+
     status_placeholder = st.empty()
     for batch_idx, batch in enumerate(batches, 1):
         status_placeholder.text(
@@ -128,14 +140,39 @@ async def process_leads(
         async def check_one(lead: dict):
             loc = lead.get("Location")
             industry = lead.get("informalIndustry")
+            industry_key = (industry or "").lower().strip()
+
             if await is_outside_whitelisted_area(
                 loc, whitelisted_areas, exact_zip_match
             ):
                 return lead
-            if await is_in_blocklisted_industry(industry, blocklisted_industries):
+
+            if industry_key and blocklisted_industries:
+                if industry_key not in blocklist_industry_cache:
+                    blocklist_industry_cache[industry_key] = (
+                        await is_in_blocklisted_industry(
+                            industry, blocklisted_industries
+                        )
+                    )
+                if blocklist_industry_cache[industry_key]:
+                    return lead
+            elif await is_in_blocklisted_industry(industry, blocklisted_industries):
                 return lead
-            if await is_outside_whitelisted_industry(industry, whitelisted_industries):
+
+            if industry_key and whitelisted_industries:
+                if industry_key not in whitelist_industry_cache:
+                    whitelist_industry_cache[industry_key] = (
+                        await is_outside_whitelisted_industry(
+                            industry, whitelisted_industries
+                        )
+                    )
+                if whitelist_industry_cache[industry_key]:
+                    return lead
+            elif await is_outside_whitelisted_industry(
+                industry, whitelisted_industries
+            ):
                 return lead
+
             return None
 
         results = await asyncio.gather(*(check_one(lead) for lead in batch))
