@@ -202,6 +202,15 @@ def get_campaign_sequences(campaign_id: int) -> List[SmartleadCampaignSequence]:
         ) from e
 
 
+def update_campaign_status(campaign_id: int, status: str) -> None:
+    """Update campaign status. Valid statuses: DRAFTED, ACTIVE, PAUSED, STOPPED, COMPLETED."""
+    query_smartlead(
+        endpoint=f"campaigns/{campaign_id}/status",
+        method="POST",
+        body={"status": status},
+    )
+
+
 def add_sequences_to_campaign(
     *, campaign_id: int, input_sequences: List[SmartleadCampaignSequenceInput]
 ) -> None:
