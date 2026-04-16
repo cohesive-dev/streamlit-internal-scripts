@@ -87,11 +87,8 @@ def _get_blob_client():
 def load_scheduled_pauses() -> list[dict]:
     """Load scheduled pauses from blob. Returns [] if blob doesn't exist."""
     blob_client = _get_blob_client()
-    try:
-        data = blob_client.download_blob().readall()
-        return json.loads(data)
-    except Exception:
-        return []
+    data = blob_client.download_blob().readall()
+    return json.loads(data)
 
 
 def save_scheduled_pauses(entries: list[dict]) -> None:
