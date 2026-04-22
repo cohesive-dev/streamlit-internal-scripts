@@ -64,6 +64,10 @@ nav = st.navigation(
             title="Mark organizations as churned",
         ),
         st.Page(
+            "pages/va/unchurn_organizations.py",
+            title="Unchurn organizations",
+        ),
+        st.Page(
             "pages/va/edit_campaign.py",
             title="Edit Campaign Template",
         ),
