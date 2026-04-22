@@ -82,7 +82,8 @@ def save_scheduled_pauses(entries: list[dict]) -> None:
 
 def remove_scheduled_pauses_for_orgs(org_ids: list[str]) -> int:
     """Cancel scheduled pauses for the given orgs by removing them from blob storage.
-    Used when a customer is saved/unchurned, or when a scheduled pause is manually cancelled."""
+    Used when a customer is saved/unchurned, or when a scheduled pause is manually cancelled.
+    """
     existing = load_scheduled_pauses()
     org_id_set = set(org_ids)
     kept = [e for e in existing if e["org_id"] not in org_id_set]
@@ -105,7 +106,7 @@ try:
         # Group by org for the cancel selector
         pending_orgs = {}
         for e in pending:
-            key = f"{e['org_name']} (pause: {e['pause_date']})"
+            key = f"{e['org_name']} (ID: {e['org_id']}, pause: {e['pause_date']})"
             pending_orgs.setdefault(key, []).append(e)
 
         st.dataframe(
