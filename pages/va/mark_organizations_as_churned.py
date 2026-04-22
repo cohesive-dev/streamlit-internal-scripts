@@ -321,7 +321,7 @@ try:
         # Group by org for the cancel selector
         pending_orgs = {}
         for e in pending:
-            key = f"{e['org_name']} (pause: {e['pause_date']})"
+            key = f"{e['org_name']} (ID: {e['org_id']}, pause: {e['pause_date']})"
             pending_orgs.setdefault(key, []).append(e)
 
         st.dataframe(
