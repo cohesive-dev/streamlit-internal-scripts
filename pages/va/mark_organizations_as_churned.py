@@ -255,26 +255,3 @@ if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
 
     else:
         st.info("Campaigns left running (no pause action taken)")
-
-# --- Show pending scheduled pauses ---
-st.divider()
-st.subheader("Pending Scheduled Pauses")
-try:
-    pending = load_scheduled_pauses()
-    if pending:
-        st.dataframe(
-            [
-                {
-                    "Org": e["org_name"],
-                    "Campaign ID": e["campaign_id"],
-                    "Pause Date": e["pause_date"],
-                    "Scheduled On": e["created_at"],
-                }
-                for e in pending
-            ],
-            use_container_width=True,
-        )
-    else:
-        st.caption("No scheduled pauses pending.")
-except Exception:
-    st.caption("Could not load scheduled pauses.")
