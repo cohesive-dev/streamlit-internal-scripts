@@ -257,10 +257,12 @@ def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
     per-25 so a mid-loop failure still surfaces the exact IDs that need
     manual repair.
 
-    Returns {per_campaign, total_inboxes, errors, needs_pool_tag_repair}
-    where `needs_pool_tag_repair` is the list of (id, email) pairs that
-    came off a campaign but failed to receive the pool tag back — these
-    are detached orphans that need operator intervention.
+    Returns {per_campaign, total_inboxes, errors, needs_pool_tag_repair,
+    needs_at_cap_tag_repair}. The two repair lists are (id, email) pairs
+    for inboxes that came off a campaign but where the tag update failed:
+    `needs_pool_tag_repair` won't be auto-attached until the pool tag is
+    restored; `needs_at_cap_tag_repair` still carries the at-cap tag and
+    will be filtered out of the active pool until the tag is removed.
     """
     from clients.smartlead.index import (
         get_campaign_email_accounts,
@@ -330,11 +332,17 @@ def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
 
     detached_ids = sorted(all_detached_ids)
     needs_pool_tag_repair: list[tuple[int, str]] = []
+    needs_at_cap_tag_repair: list[tuple[int, str]] = []
     if detached_ids:
-        _, _, at_cap_msgs = _apply_tag_batched(
+        _, at_cap_failed, at_cap_msgs = _apply_tag_batched(
             detached_ids, TAG_PREWARMED_AT_CAP, "DELETE", "Remove at-cap tag"
         )
         errors.extend(at_cap_msgs)
+        # At-cap tag still attached = inbox stays out of the eligible pool
+        # (get_prewarmed_pool filters on it). Symmetric with pool-tag repair.
+        needs_at_cap_tag_repair = [
+            (aid, id_to_email.get(aid, str(aid))) for aid in at_cap_failed
+        ]
 
         _, pool_failed, pool_msgs = _apply_tag_batched(
             detached_ids, TAG_PREWARMED_POOL, "POST", "Restore pool tag"
@@ -351,6 +359,7 @@ def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
         "total_inboxes": len(detached_ids),
         "errors": errors,
         "needs_pool_tag_repair": needs_pool_tag_repair,
+        "needs_at_cap_tag_repair": needs_at_cap_tag_repair,
     }
 
 
@@ -366,6 +375,7 @@ def reclaim_prewarmed_for_orgs(org_ids: list[str]) -> dict:
             "total_inboxes": 0,
             "errors": [],
             "needs_pool_tag_repair": [],
+            "needs_at_cap_tag_repair": [],
         }
     return reclaim_prewarmed_inboxes_for_campaigns(all_campaign_ids)
 
@@ -440,11 +450,23 @@ if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
     st.subheader("Reclaiming pre-warmed inboxes...")
     reclaim = reclaim_prewarmed_for_orgs(selected_org_ids)
     if reclaim["total_inboxes"]:
-        st.success(
-            f"Detached {reclaim['total_inboxes']} pre-warmed inbox(es) "
-            f"across {len(reclaim['per_campaign'])} campaign(s); "
-            f"restored pool tag, removed at-cap tag."
+        tag_ops_clean = (
+            not reclaim["needs_pool_tag_repair"]
+            and not reclaim["needs_at_cap_tag_repair"]
         )
+        detach_summary = (
+            f"Detached {reclaim['total_inboxes']} pre-warmed inbox(es) "
+            f"across {len(reclaim['per_campaign'])} campaign(s)"
+        )
+        if tag_ops_clean:
+            st.success(
+                f"{detach_summary}; restored pool tag, removed at-cap tag."
+            )
+        else:
+            st.warning(
+                f"{detach_summary}; tag updates partially failed — see "
+                f"manual repair block(s) below."
+            )
         with st.expander("Detached inboxes by campaign"):
             for cid, emails in reclaim["per_campaign"].items():
                 st.markdown(f"**Campaign {cid}** — {len(emails)} inbox(es)")
@@ -464,6 +486,16 @@ if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
             f"the auto-attach flow can pick them back up:"
         )
         for aid, email in reclaim["needs_pool_tag_repair"]:
+            st.code(f"{aid}  {email}")
+    # At-cap tag stuck = inbox stays out of the eligible pool until removed.
+    if reclaim["needs_at_cap_tag_repair"]:
+        st.error(
+            f"MANUAL REPAIR NEEDED — {len(reclaim['needs_at_cap_tag_repair'])} "
+            f"inbox(es) still carry the at-cap tag (371065) after detach. "
+            f"Remove the tag manually in Smartlead so they re-enter the "
+            f"eligible pool:"
+        )
+        for aid, email in reclaim["needs_at_cap_tag_repair"]:
             st.code(f"{aid}  {email}")
 
     if reclaim["errors"] and not force_pause_on_reclaim_error:

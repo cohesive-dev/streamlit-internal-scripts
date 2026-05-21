@@ -39,7 +39,28 @@ def query_smartlead(
             timeout=120,
         )
         response.raise_for_status()
-        return response.json()
+        # Smartlead occasionally returns 200 with an application-level
+        # failure body — `{"ok": false, ...}` or `{"success": false, ...}`.
+        # Treat those as exceptions so per-batch / repair-list callers
+        # don't mark a logical failure as a success. Mirror the pattern
+        # in cohesive-slack-bots/bots/investigation/skills/attach_prewarmed.py
+        # (`_raise_smartlead`).
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        if isinstance(data, dict) and (
+            data.get("ok") is False or data.get("success") is False
+        ):
+            msg = (
+                data.get("message")
+                or data.get("error")
+                or "Smartlead returned a failure body"
+            )
+            raise Exception(
+                f"Email Server Error with {endpoint} - {msg}"
+            )
+        return data
     except requests.exceptions.HTTPError as e:
         try:
             error_data = response.json()
