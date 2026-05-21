@@ -62,18 +62,34 @@ def query_smartlead(
             )
         return data
     except requests.exceptions.HTTPError as e:
+        # Avoid str(e) — Requests' HTTPError includes the full URL with
+        # the api_key query param, which would leak into st.error(...).
+        # Build the message from status + reason + endpoint instead, and
+        # only pull error/message fields if the body parses as JSON.
+        status = response.status_code
+        reason = response.reason or ""
+        error_msg = ""
+        detailed_msg = ""
         try:
             error_data = response.json()
-            error_msg = error_data.get("error", str(e))
-            detailed_msg = error_data.get("message", "")
+            if isinstance(error_data, dict):
+                error_msg = error_data.get("error", "") or ""
+                detailed_msg = error_data.get("message", "") or ""
         except ValueError:
-            error_msg = str(e)
-            detailed_msg = ""
+            pass
+        suffix = (
+            f" - {error_msg} : {detailed_msg}"
+            if (error_msg or detailed_msg)
+            else ""
+        )
         raise Exception(
-            f"Email Server Error with {endpoint} - {error_msg} : {detailed_msg}"
+            f"Email Server Error with {endpoint} ({status} {reason}){suffix}"
         ) from e
     except requests.exceptions.RequestException as e:
-        raise Exception(f"Email Server Error with {endpoint} - {str(e)}") from e
+        # Same redaction concern — Requests exceptions stringify the URL.
+        raise Exception(
+            f"Email Server Error with {endpoint} - {type(e).__name__}"
+        ) from e
 
 
 def query_smartlead_graphql(
@@ -233,12 +249,23 @@ def update_campaign_status(campaign_id: int, status: str) -> None:
 
 
 def get_campaign_email_accounts(campaign_id: int) -> list[dict]:
-    """List email accounts attached to a campaign."""
+    """List email accounts attached to a campaign.
+
+    Fails closed on a malformed response (None / non-list) so callers
+    don't treat an empty/unparseable 200 as "no accounts attached" and
+    silently no-op. An actually empty campaign returns `[]` from
+    Smartlead, which is the only shape that should pass through.
+    """
     result = query_smartlead(
         endpoint=f"campaigns/{campaign_id}/email-accounts",
         method="GET",
     )
-    return result if isinstance(result, list) else []
+    if not isinstance(result, list):
+        raise Exception(
+            f"campaigns/{campaign_id}/email-accounts returned unexpected "
+            f"shape ({type(result).__name__}); expected list"
+        )
+    return result
 
 
 def detach_email_accounts_from_campaign(
@@ -273,8 +300,23 @@ def get_tags_for_emails(emails: list[str]) -> dict[int, list[dict]]:
             method="POST",
             body={"email_ids": batch},
         )
-        rows = (resp or {}).get("data") if isinstance(resp, dict) else None
-        for row in rows or []:
+        # Fail closed on malformed response — without this, an
+        # empty/unparseable 200 turns into "no tags" and the orchestrator
+        # would conclude no inboxes are pre-warmed. The orchestrator's
+        # try/except converts the raise into a per-campaign skip-detach
+        # log entry, which is the desired safe outcome.
+        if not isinstance(resp, dict):
+            raise Exception(
+                f"email-accounts/tag-list returned unexpected shape "
+                f"({type(resp).__name__}); expected dict"
+            )
+        rows = resp.get("data")
+        if not isinstance(rows, list):
+            raise Exception(
+                f"email-accounts/tag-list missing or malformed 'data' "
+                f"({type(rows).__name__}); expected list"
+            )
+        for row in rows:
             raw_id = row.get("email_account_id")
             if raw_id is None:
                 continue
