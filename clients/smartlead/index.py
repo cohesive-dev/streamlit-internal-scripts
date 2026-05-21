@@ -211,6 +211,79 @@ def update_campaign_status(campaign_id: int, status: str) -> None:
     )
 
 
+def get_campaign_email_accounts(campaign_id: int) -> list[dict]:
+    """List email accounts attached to a campaign."""
+    result = query_smartlead(
+        endpoint=f"campaigns/{campaign_id}/email-accounts",
+        method="GET",
+    )
+    return result if isinstance(result, list) else []
+
+
+def detach_email_accounts_from_campaign(
+    campaign_id: int, account_ids: list[int]
+) -> None:
+    """Detach the given email accounts from a campaign."""
+    if not account_ids:
+        return
+    query_smartlead(
+        endpoint=f"campaigns/{campaign_id}/email-accounts",
+        method="DELETE",
+        body={"email_account_ids": account_ids},
+    )
+
+
+def get_tags_for_emails(emails: list[str]) -> dict[int, list[dict]]:
+    """Return {email_account_id: [{tag_id, name}, ...]} via Smartlead tag-list.
+
+    Smartlead's response uses `{tag_id, tag_name}` per a 2026-05 live probe,
+    but the docs show `{id, name}`. Callers should read either shape.
+    Batched at 25 to mirror the tag-mapping endpoint cap.
+    """
+    if not emails:
+        return {}
+    by_id: dict[int, list[dict]] = {}
+    for i in range(0, len(emails), 25):
+        batch = emails[i : i + 25]
+        resp = query_smartlead(
+            endpoint="email-accounts/tag-list",
+            method="POST",
+            body={"email_ids": batch},
+        )
+        rows = (resp or {}).get("data") if isinstance(resp, dict) else None
+        for row in rows or []:
+            acct_id = row.get("email_account_id")
+            if isinstance(acct_id, int):
+                by_id[acct_id] = row.get("tags") or []
+    return by_id
+
+
+def add_tag_to_accounts(account_ids: list[int], tag_id: int) -> None:
+    """Apply a tag to email accounts. Batched at 25 (Smartlead cap)."""
+    if not account_ids:
+        return
+    for i in range(0, len(account_ids), 25):
+        batch = account_ids[i : i + 25]
+        query_smartlead(
+            endpoint="email-accounts/tag-mapping",
+            method="POST",
+            body={"email_account_ids": batch, "tag_ids": [tag_id]},
+        )
+
+
+def remove_tag_from_accounts(account_ids: list[int], tag_id: int) -> None:
+    """Remove a tag from email accounts. Batched at 25 (Smartlead cap)."""
+    if not account_ids:
+        return
+    for i in range(0, len(account_ids), 25):
+        batch = account_ids[i : i + 25]
+        query_smartlead(
+            endpoint="email-accounts/tag-mapping",
+            method="DELETE",
+            body={"email_account_ids": batch, "tag_ids": [tag_id]},
+        )
+
+
 def add_sequences_to_campaign(
     *, campaign_id: int, input_sequences: List[SmartleadCampaignSequenceInput]
 ) -> None:

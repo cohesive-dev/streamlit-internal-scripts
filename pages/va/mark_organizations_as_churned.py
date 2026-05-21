@@ -9,6 +9,18 @@ from clients.azure_blob_storage.index import get_or_create_blob_service_client
 
 SCHEDULED_PAUSES_BLOB = "scheduled-campaign-pauses.json"
 
+# Pre-warmed inbox tags (canonical Smartlead tag IDs)
+TAG_PREWARMED_POOL = 258486  # active, attach-eligible pool
+TAG_PREWARMED_AT_CAP = 371065  # pre-warmed at MAX_CAMPAIGNS=2
+TAG_LEGACY_MAILIN_PREWARMED = 318575  # older MailIn pre-warmed
+PREWARMED_TAG_IDS = {
+    TAG_PREWARMED_POOL,
+    TAG_PREWARMED_AT_CAP,
+    TAG_LEGACY_MAILIN_PREWARMED,
+}
+# MailIn-hosted inboxes — catches pre-warmed ones that may have lost their tag
+PREWARMED_SMTP_HOST = "mail.getcohesiveaihq.biz"
+
 
 def get_active_organizations():
     conn = st.connection("postgresql", type="sql")
@@ -174,6 +186,113 @@ def pause_campaigns_now(org_ids: list[str]) -> dict[str, list]:
     return {"paused": paused, "unlinked": unlink_result["unlinked"], "errors": errors}
 
 
+def _is_prewarmed(account: dict, tags: list[dict]) -> bool:
+    """Identify a pre-warmed inbox by tag, SMTP type, or MailIn host.
+
+    Uses any of:
+      - Tag 258486 (Pre-Warmed Pool), 371065 (Pre-Warmed At Cap),
+        318575 (legacy MailIn Pre-Warmed)
+      - account.type == "SMTP" (catches MailIn inboxes)
+      - smtp_host contains mail.getcohesiveaihq.biz (MailIn-hosted fallback)
+    """
+    if account.get("type") == "SMTP":
+        return True
+    if PREWARMED_SMTP_HOST in (account.get("smtp_host") or ""):
+        return True
+    for t in tags or []:
+        tid = t.get("tag_id") or t.get("id")
+        if tid in PREWARMED_TAG_IDS:
+            return True
+    return False
+
+
+def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
+    """Detach pre-warmed inboxes from the given campaigns and restore pool tags.
+
+    For each campaign: fetch attached accounts → check tag-list + smtp_host →
+    detach the pre-warmed subset. After all detaches, on the union of detached
+    accounts: remove TAG_PREWARMED_AT_CAP (they're no longer at cap) and ensure
+    TAG_PREWARMED_POOL is present (Smartlead tag-mapping POST is idempotent).
+
+    Returns {per_campaign, total_inboxes, errors}.
+    """
+    from clients.smartlead.index import (
+        get_campaign_email_accounts,
+        detach_email_accounts_from_campaign,
+        get_tags_for_emails,
+        add_tag_to_accounts,
+        remove_tag_from_accounts,
+    )
+
+    per_campaign: dict[int, list[str]] = {}
+    all_detached_ids: set[int] = set()
+    errors: list[str] = []
+
+    for cid in campaign_ids:
+        try:
+            accounts = get_campaign_email_accounts(cid)
+        except Exception as e:
+            errors.append(f"Campaign {cid} fetch accounts: {e}")
+            continue
+        if not accounts:
+            continue
+
+        emails = [a.get("from_email") for a in accounts if a.get("from_email")]
+        try:
+            tags_by_id = get_tags_for_emails(emails)
+        except Exception as e:
+            errors.append(f"Campaign {cid} fetch tags: {e}")
+            tags_by_id = {}
+
+        prewarmed_ids: list[int] = []
+        prewarmed_emails: list[str] = []
+        for a in accounts:
+            aid = a.get("id")
+            if not isinstance(aid, int):
+                continue
+            if _is_prewarmed(a, tags_by_id.get(aid, [])):
+                prewarmed_ids.append(aid)
+                prewarmed_emails.append(a.get("from_email") or str(aid))
+
+        if not prewarmed_ids:
+            continue
+
+        try:
+            detach_email_accounts_from_campaign(cid, prewarmed_ids)
+            per_campaign[cid] = prewarmed_emails
+            all_detached_ids.update(prewarmed_ids)
+        except Exception as e:
+            errors.append(f"Campaign {cid} detach: {e}")
+
+    detached_ids = sorted(all_detached_ids)
+    if detached_ids:
+        try:
+            remove_tag_from_accounts(detached_ids, TAG_PREWARMED_AT_CAP)
+        except Exception as e:
+            errors.append(f"Remove at-cap tag: {e}")
+        try:
+            add_tag_to_accounts(detached_ids, TAG_PREWARMED_POOL)
+        except Exception as e:
+            errors.append(f"Restore pool tag: {e}")
+
+    return {
+        "per_campaign": per_campaign,
+        "total_inboxes": len(detached_ids),
+        "errors": errors,
+    }
+
+
+def reclaim_prewarmed_for_orgs(org_ids: list[str]) -> dict:
+    """Resolve campaigns for the given orgs and reclaim their pre-warmed inboxes."""
+    campaigns_by_org = get_campaign_ids_for_orgs(org_ids)
+    all_campaign_ids: list[int] = []
+    for cids in campaigns_by_org.values():
+        all_campaign_ids.extend(cids)
+    if not all_campaign_ids:
+        return {"per_campaign": {}, "total_inboxes": 0, "errors": []}
+    return reclaim_prewarmed_inboxes_for_campaigns(all_campaign_ids)
+
+
 st.title("Pause Platform Organizations")
 
 orgs = get_active_organizations()
@@ -230,7 +349,30 @@ if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
     updated = pause_platform_organizations(org_ids=selected_org_ids)
     st.success(f"Marked {updated} organization(s) as churned")
 
-    # 2. Handle campaigns
+    # 2. Reclaim pre-warmed inboxes regardless of pause option. A churned
+    # customer shouldn't keep holding shared pool inboxes through the
+    # wind-down period; their dedicated inboxes keep the campaign sending
+    # in the meantime if it's still running. Runs BEFORE pause/unlink so
+    # the DB still resolves campaigns for these orgs.
+    st.divider()
+    st.subheader("Reclaiming pre-warmed inboxes...")
+    reclaim = reclaim_prewarmed_for_orgs(selected_org_ids)
+    if reclaim["total_inboxes"]:
+        st.success(
+            f"Detached {reclaim['total_inboxes']} pre-warmed inbox(es) "
+            f"across {len(reclaim['per_campaign'])} campaign(s); "
+            f"restored pool tag, removed at-cap tag."
+        )
+        with st.expander("Detached inboxes by campaign"):
+            for cid, emails in reclaim["per_campaign"].items():
+                st.markdown(f"**Campaign {cid}** — {len(emails)} inbox(es)")
+                st.caption(", ".join(emails))
+    else:
+        st.info("No pre-warmed inboxes attached to these orgs' campaigns.")
+    for err in reclaim["errors"]:
+        st.error(err)
+
+    # 3. Handle campaigns
     st.divider()
     if pause_option == "Pause campaigns immediately":
         st.subheader("Pausing Smartlead campaigns...")
