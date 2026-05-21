@@ -9,7 +9,12 @@ from clients.azure_blob_storage.index import get_or_create_blob_service_client
 
 SCHEDULED_PAUSES_BLOB = "scheduled-campaign-pauses.json"
 
-# Pre-warmed inbox tags (canonical Smartlead tag IDs)
+# Pre-warmed inbox tags (canonical Smartlead tag IDs).
+# These are the AUTHORITATIVE signal for "this inbox came from the shared pool."
+# Customer-dedicated MailIn inboxes (provisioned via setup_mailin_inboxes*.py)
+# share the mail.getcohesiveaihq.biz host and SMTP type with pool inboxes —
+# so host/type cannot be used as fallback without false positives that would
+# detach customer-owned inboxes on churn.
 TAG_PREWARMED_POOL = 258486  # active, attach-eligible pool
 TAG_PREWARMED_AT_CAP = 371065  # pre-warmed at MAX_CAMPAIGNS=2
 TAG_LEGACY_MAILIN_PREWARMED = 318575  # older MailIn pre-warmed
@@ -18,8 +23,6 @@ PREWARMED_TAG_IDS = {
     TAG_PREWARMED_AT_CAP,
     TAG_LEGACY_MAILIN_PREWARMED,
 }
-# MailIn-hosted inboxes — catches pre-warmed ones that may have lost their tag
-PREWARMED_SMTP_HOST = "mail.getcohesiveaihq.biz"
 
 
 def get_active_organizations():
@@ -186,21 +189,25 @@ def pause_campaigns_now(org_ids: list[str]) -> dict[str, list]:
     return {"paused": paused, "unlinked": unlink_result["unlinked"], "errors": errors}
 
 
-def _is_prewarmed(account: dict, tags: list[dict]) -> bool:
-    """Identify a pre-warmed inbox by tag, SMTP type, or MailIn host.
+def _is_prewarmed(tags: list[dict]) -> bool:
+    """Identify a pre-warmed inbox by tag.
 
-    Uses any of:
-      - Tag 258486 (Pre-Warmed Pool), 371065 (Pre-Warmed At Cap),
-        318575 (legacy MailIn Pre-Warmed)
-      - account.type == "SMTP" (catches MailIn inboxes)
-      - smtp_host contains mail.getcohesiveaihq.biz (MailIn-hosted fallback)
+    Tags are the only safe signal: customer-dedicated MailIn inboxes use
+    the same SMTP type and host as pool inboxes, so type/host fallbacks
+    would false-positive and detach customer-owned inboxes on churn.
+
+    Accepts both Smartlead tag-list response shapes — `{tag_id, tag_name}`
+    (older) and `{id, name}` (newer Mintlify docs). Tag IDs may come back
+    as int or numeric string; coerce before comparing.
     """
-    if account.get("type") == "SMTP":
-        return True
-    if PREWARMED_SMTP_HOST in (account.get("smtp_host") or ""):
-        return True
     for t in tags or []:
-        tid = t.get("tag_id") or t.get("id")
+        raw = t.get("tag_id") if t.get("tag_id") is not None else t.get("id")
+        if raw is None:
+            continue
+        try:
+            tid = int(raw)
+        except (TypeError, ValueError):
+            continue
         if tid in PREWARMED_TAG_IDS:
             return True
     return False
@@ -238,11 +245,17 @@ def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
             continue
 
         emails = [a.get("from_email") for a in accounts if a.get("from_email")]
+        # Fail closed: without a reliable tag map, _is_prewarmed would return
+        # False for every account and we'd detach nothing. That's already
+        # safe, but we surface the error explicitly and skip the campaign
+        # to match the Special-Ignore pattern in cohesive-slack-bots.
         try:
             tags_by_id = get_tags_for_emails(emails)
         except Exception as e:
-            errors.append(f"Campaign {cid} fetch tags: {e}")
-            tags_by_id = {}
+            errors.append(
+                f"Campaign {cid} tag-list failed ({e}); skipping detach for this campaign"
+            )
+            continue
 
         prewarmed_ids: list[int] = []
         prewarmed_emails: list[str] = []
@@ -250,19 +263,36 @@ def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
             aid = a.get("id")
             if not isinstance(aid, int):
                 continue
-            if _is_prewarmed(a, tags_by_id.get(aid, [])):
+            if _is_prewarmed(tags_by_id.get(aid, [])):
                 prewarmed_ids.append(aid)
                 prewarmed_emails.append(a.get("from_email") or str(aid))
 
         if not prewarmed_ids:
             continue
 
-        try:
-            detach_email_accounts_from_campaign(cid, prewarmed_ids)
-            per_campaign[cid] = prewarmed_emails
-            all_detached_ids.update(prewarmed_ids)
-        except Exception as e:
-            errors.append(f"Campaign {cid} detach: {e}")
+        # Batch detach at 25 — detach endpoint cap is undocumented; mirror
+        # the tag-mapping cap defensively. Track which batches succeeded
+        # so post-detach tag updates only target IDs that actually came off.
+        detached_this_campaign: list[int] = []
+        for i in range(0, len(prewarmed_ids), 25):
+            batch = prewarmed_ids[i : i + 25]
+            try:
+                detach_email_accounts_from_campaign(cid, batch)
+                detached_this_campaign.extend(batch)
+            except Exception as e:
+                errors.append(
+                    f"Campaign {cid} detach batch {i // 25 + 1} "
+                    f"({len(batch)} inbox(es)): {e}"
+                )
+
+        if detached_this_campaign:
+            detached_emails = [
+                a.get("from_email") or str(a.get("id"))
+                for a in accounts
+                if a.get("id") in detached_this_campaign
+            ]
+            per_campaign[cid] = detached_emails
+            all_detached_ids.update(detached_this_campaign)
 
     detached_ids = sorted(all_detached_ids)
     if detached_ids:
@@ -345,16 +375,11 @@ confirm = st.checkbox(
 )
 
 if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
-    # 1. Mark orgs as churned in DB
-    updated = pause_platform_organizations(org_ids=selected_org_ids)
-    st.success(f"Marked {updated} organization(s) as churned")
-
-    # 2. Reclaim pre-warmed inboxes regardless of pause option. A churned
-    # customer shouldn't keep holding shared pool inboxes through the
-    # wind-down period; their dedicated inboxes keep the campaign sending
-    # in the meantime if it's still running. Runs BEFORE pause/unlink so
-    # the DB still resolves campaigns for these orgs.
-    st.divider()
+    # 1. Reclaim pre-warmed inboxes BEFORE flipping the org to paused.
+    # If Smartlead errors here, the org stays active (paused=false) so the
+    # operator can retry from the same dropdown. If reclaim happened after
+    # the DB flip, the org would disappear from get_active_organizations()
+    # and retry from this page would be awkward.
     st.subheader("Reclaiming pre-warmed inboxes...")
     reclaim = reclaim_prewarmed_for_orgs(selected_org_ids)
     if reclaim["total_inboxes"]:
@@ -371,6 +396,11 @@ if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
         st.info("No pre-warmed inboxes attached to these orgs' campaigns.")
     for err in reclaim["errors"]:
         st.error(err)
+
+    # 2. Mark orgs as churned in DB
+    st.divider()
+    updated = pause_platform_organizations(org_ids=selected_org_ids)
+    st.success(f"Marked {updated} organization(s) as churned")
 
     # 3. Handle campaigns
     st.divider()
