@@ -238,7 +238,9 @@ def get_tags_for_emails(emails: list[str]) -> dict[int, list[dict]]:
 
     Smartlead's response uses `{tag_id, tag_name}` per a 2026-05 live probe,
     but the docs show `{id, name}`. Callers should read either shape.
-    Batched at 25 to mirror the tag-mapping endpoint cap.
+    `email_account_id` may be int or numeric string — coerce to int so
+    callers can key by id consistently. Batched at 25 to mirror the
+    tag-mapping endpoint cap.
     """
     if not emails:
         return {}
@@ -252,9 +254,14 @@ def get_tags_for_emails(emails: list[str]) -> dict[int, list[dict]]:
         )
         rows = (resp or {}).get("data") if isinstance(resp, dict) else None
         for row in rows or []:
-            acct_id = row.get("email_account_id")
-            if isinstance(acct_id, int):
-                by_id[acct_id] = row.get("tags") or []
+            raw_id = row.get("email_account_id")
+            if raw_id is None:
+                continue
+            try:
+                acct_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            by_id[acct_id] = row.get("tags") or []
     return by_id
 
 

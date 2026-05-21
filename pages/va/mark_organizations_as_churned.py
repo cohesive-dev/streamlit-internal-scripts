@@ -213,26 +213,64 @@ def _is_prewarmed(tags: list[dict]) -> bool:
     return False
 
 
+def _apply_tag_batched(
+    account_ids: list[int],
+    tag_id: int,
+    op_method: str,
+    op_name: str,
+) -> tuple[list[int], list[int], list[str]]:
+    """Apply tag-mapping (POST/DELETE) per 25-batch. Track per-batch outcomes
+    so a mid-failure leaves us with the exact set of IDs that still need
+    repair, not a swallow-and-continue.
+
+    Returns (succeeded_ids, failed_ids, error_msgs).
+    """
+    from clients.smartlead.index import query_smartlead
+
+    succeeded: list[int] = []
+    failed: list[int] = []
+    msgs: list[str] = []
+    for i in range(0, len(account_ids), 25):
+        batch = account_ids[i : i + 25]
+        try:
+            query_smartlead(
+                endpoint="email-accounts/tag-mapping",
+                method=op_method,
+                body={"email_account_ids": batch, "tag_ids": [tag_id]},
+            )
+            succeeded.extend(batch)
+        except Exception as e:
+            failed.extend(batch)
+            msgs.append(
+                f"{op_name} batch {i // 25 + 1} ({len(batch)} inbox(es)) failed: {e}"
+            )
+    return succeeded, failed, msgs
+
+
 def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
     """Detach pre-warmed inboxes from the given campaigns and restore pool tags.
 
-    For each campaign: fetch attached accounts → check tag-list + smtp_host →
+    For each campaign: fetch attached accounts → check tag-list →
     detach the pre-warmed subset. After all detaches, on the union of detached
-    accounts: remove TAG_PREWARMED_AT_CAP (they're no longer at cap) and ensure
-    TAG_PREWARMED_POOL is present (Smartlead tag-mapping POST is idempotent).
+    accounts: remove TAG_PREWARMED_AT_CAP (they're no longer at cap) and add
+    TAG_PREWARMED_POOL (idempotent POST). Both tag operations are batched
+    per-25 so a mid-loop failure still surfaces the exact IDs that need
+    manual repair.
 
-    Returns {per_campaign, total_inboxes, errors}.
+    Returns {per_campaign, total_inboxes, errors, needs_pool_tag_repair}
+    where `needs_pool_tag_repair` is the list of (id, email) pairs that
+    came off a campaign but failed to receive the pool tag back — these
+    are detached orphans that need operator intervention.
     """
     from clients.smartlead.index import (
         get_campaign_email_accounts,
         detach_email_accounts_from_campaign,
         get_tags_for_emails,
-        add_tag_to_accounts,
-        remove_tag_from_accounts,
     )
 
     per_campaign: dict[int, list[str]] = {}
     all_detached_ids: set[int] = set()
+    id_to_email: dict[int, str] = {}
     errors: list[str] = []
 
     for cid in campaign_ids:
@@ -258,14 +296,13 @@ def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
             continue
 
         prewarmed_ids: list[int] = []
-        prewarmed_emails: list[str] = []
         for a in accounts:
             aid = a.get("id")
             if not isinstance(aid, int):
                 continue
             if _is_prewarmed(tags_by_id.get(aid, [])):
                 prewarmed_ids.append(aid)
-                prewarmed_emails.append(a.get("from_email") or str(aid))
+                id_to_email[aid] = a.get("from_email") or str(aid)
 
         if not prewarmed_ids:
             continue
@@ -286,29 +323,34 @@ def reclaim_prewarmed_inboxes_for_campaigns(campaign_ids: list[int]) -> dict:
                 )
 
         if detached_this_campaign:
-            detached_emails = [
-                a.get("from_email") or str(a.get("id"))
-                for a in accounts
-                if a.get("id") in detached_this_campaign
+            per_campaign[cid] = [
+                id_to_email.get(aid, str(aid)) for aid in detached_this_campaign
             ]
-            per_campaign[cid] = detached_emails
             all_detached_ids.update(detached_this_campaign)
 
     detached_ids = sorted(all_detached_ids)
+    needs_pool_tag_repair: list[tuple[int, str]] = []
     if detached_ids:
-        try:
-            remove_tag_from_accounts(detached_ids, TAG_PREWARMED_AT_CAP)
-        except Exception as e:
-            errors.append(f"Remove at-cap tag: {e}")
-        try:
-            add_tag_to_accounts(detached_ids, TAG_PREWARMED_POOL)
-        except Exception as e:
-            errors.append(f"Restore pool tag: {e}")
+        _, _, at_cap_msgs = _apply_tag_batched(
+            detached_ids, TAG_PREWARMED_AT_CAP, "DELETE", "Remove at-cap tag"
+        )
+        errors.extend(at_cap_msgs)
+
+        _, pool_failed, pool_msgs = _apply_tag_batched(
+            detached_ids, TAG_PREWARMED_POOL, "POST", "Restore pool tag"
+        )
+        errors.extend(pool_msgs)
+        # Inboxes that came off a campaign but didn't get the pool tag back
+        # are stranded — surface them prominently for manual repair.
+        needs_pool_tag_repair = [
+            (aid, id_to_email.get(aid, str(aid))) for aid in pool_failed
+        ]
 
     return {
         "per_campaign": per_campaign,
         "total_inboxes": len(detached_ids),
         "errors": errors,
+        "needs_pool_tag_repair": needs_pool_tag_repair,
     }
 
 
@@ -319,7 +361,12 @@ def reclaim_prewarmed_for_orgs(org_ids: list[str]) -> dict:
     for cids in campaigns_by_org.values():
         all_campaign_ids.extend(cids)
     if not all_campaign_ids:
-        return {"per_campaign": {}, "total_inboxes": 0, "errors": []}
+        return {
+            "per_campaign": {},
+            "total_inboxes": 0,
+            "errors": [],
+            "needs_pool_tag_repair": [],
+        }
     return reclaim_prewarmed_inboxes_for_campaigns(all_campaign_ids)
 
 
@@ -373,13 +420,23 @@ if pause_option == "Schedule pause for a future date":
 confirm = st.checkbox(
     "I understand this will mark the selected organizations as churned"
 )
+force_pause_on_reclaim_error = st.checkbox(
+    "Force pause even if pre-warmed reclaim has errors",
+    value=False,
+    help=(
+        "By default, if reclaim returns any error (tag-list failure, detach "
+        "failure, pool-tag restore failure), the org is NOT marked churned "
+        "and campaigns are NOT paused — so you can fix the issue and retry "
+        "from the same dropdown. Check this to push through known-tolerable "
+        "errors and complete the churn anyway."
+    ),
+)
 
 if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
     # 1. Reclaim pre-warmed inboxes BEFORE flipping the org to paused.
-    # If Smartlead errors here, the org stays active (paused=false) so the
-    # operator can retry from the same dropdown. If reclaim happened after
-    # the DB flip, the org would disappear from get_active_organizations()
-    # and retry from this page would be awkward.
+    # If Smartlead errors here and the operator hasn't checked the override,
+    # we halt before the DB pause so the org stays active (paused=false)
+    # and the operator can retry from the same dropdown.
     st.subheader("Reclaiming pre-warmed inboxes...")
     reclaim = reclaim_prewarmed_for_orgs(selected_org_ids)
     if reclaim["total_inboxes"]:
@@ -396,6 +453,27 @@ if st.button("Pause organizations", disabled=not confirm or not selected_orgs):
         st.info("No pre-warmed inboxes attached to these orgs' campaigns.")
     for err in reclaim["errors"]:
         st.error(err)
+    # Inboxes detached from a campaign but missing the pool tag are orphans
+    # — they won't be re-attached by the auto-attach flow until repaired.
+    # Surface them prominently with both id and email for manual cleanup.
+    if reclaim["needs_pool_tag_repair"]:
+        st.error(
+            f"MANUAL REPAIR NEEDED — {len(reclaim['needs_pool_tag_repair'])} "
+            f"inbox(es) were detached from a campaign but failed to receive "
+            f"the pool tag (258486). Re-tag them manually in Smartlead so "
+            f"the auto-attach flow can pick them back up:"
+        )
+        for aid, email in reclaim["needs_pool_tag_repair"]:
+            st.code(f"{aid}  {email}")
+
+    if reclaim["errors"] and not force_pause_on_reclaim_error:
+        st.warning(
+            "Reclaim returned errors and 'Force pause' is unchecked — "
+            "org NOT marked churned and campaigns NOT paused. Fix the "
+            "underlying issue and click 'Pause organizations' again, or "
+            "check the 'Force pause' box above to push through."
+        )
+        st.stop()
 
     # 2. Mark orgs as churned in DB
     st.divider()
