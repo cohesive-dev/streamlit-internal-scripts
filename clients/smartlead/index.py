@@ -82,14 +82,19 @@ def query_smartlead(
             if (error_msg or detailed_msg)
             else ""
         )
+        # `from None` (not `from e`) — Requests' original HTTPError/
+        # RequestException stringifies with the full URL including the
+        # api_key query param. Preserving the chain via `from e` would
+        # let `traceback.format_exception` or readers of `__cause__`
+        # re-expose the secret even though our own message is clean.
         raise Exception(
             f"Email Server Error with {endpoint} ({status} {reason}){suffix}"
-        ) from e
+        ) from None
     except requests.exceptions.RequestException as e:
         # Same redaction concern — Requests exceptions stringify the URL.
         raise Exception(
             f"Email Server Error with {endpoint} - {type(e).__name__}"
-        ) from e
+        ) from None
 
 
 def query_smartlead_graphql(
